@@ -566,6 +566,77 @@ where
         }
     }
 
+    /// Interleave lanes from `self` and `other`
+    ///
+    /// Produces two vectors with lanes alternatively taken from `self` and
+    /// `other`. The first result contains the first LANES/2 lanes, starting
+    /// with the first lane of `self`.
+    ///
+    /// # Panics
+    ///
+    /// * If `LANES` is not even.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use slipstream::prelude::*;
+    /// let a = u32x4::from([1, 2, 3, 4]);
+    /// let b = u32x4::from([5, 6, 7, 8]);
+    /// assert_eq!(
+    ///     a.interleave(b),
+    ///     [u32x4::from([1, 5, 2, 6]), u32x4::from([3, 7, 4, 8])]
+    /// );
+    /// ```
+    #[inline]
+    pub fn interleave(self, other: Self) -> [Self; 2] {
+        assert_eq!(S % 2, 0, "The lane count must be even");
+        let midpoint = S / 2;
+        let mut result = [[MaybeUninit::<B>::uninit(); S]; 2];
+        for src_lane in 0..S {
+            let dst = src_lane / midpoint;
+            let dst_pair = src_lane % midpoint;
+            result[dst][2 * dst_pair].write(self[src_lane]);
+            result[dst][2 * dst_pair + 1].write(other[src_lane]);
+        }
+        result.map(|arr| Self::from(arr.map(|lane| unsafe { lane.assume_init() })))
+    }
+
+    /// Deinterleave two vectors
+    ///
+    /// Produces two vectors with lanes taken from every other lane of `self`
+    /// and `other`. The first result starts at the first lane, the second
+    /// result starts at the second lane.
+    ///
+    /// # Panics
+    ///
+    /// * If `LANES` is not even.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use slipstream::prelude::*;
+    /// let a = u32x4::from([1, 2, 3, 4]);
+    /// let b = u32x4::from([5, 6, 7, 8]);
+    /// assert_eq!(
+    ///     a.deinterleave(b),
+    ///     [u32x4::from([1, 3, 5, 7]), u32x4::from([2, 4, 6, 8])]
+    /// );
+    /// ```
+    #[inline]
+    pub fn deinterleave(self, other: Self) -> [Self; 2] {
+        assert_eq!(S % 2, 0, "The lane count must be even");
+        let midpoint = S / 2;
+        let input = [self, other];
+        let mut result = [[MaybeUninit::<B>::uninit(); S]; 2];
+        for dst_lane in 0..S {
+            let src = dst_lane / midpoint;
+            let src_pair = dst_lane % midpoint;
+            result[0][dst_lane].write(input[src][2 * src_pair]);
+            result[1][dst_lane].write(input[src][2 * src_pair + 1]);
+        }
+        result.map(|arr| Self::from(arr.map(|lane| unsafe { lane.assume_init() })))
+    }
+
     /// Blend self and other using mask.
     ///
     /// Imports enabled lanes from `other`, keeps disabled lanes from `self`.
