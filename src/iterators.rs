@@ -67,7 +67,8 @@ mod experiment {
         ///
         /// # Safety
         ///
-        /// If padding is needed, then `padding` must contain a valid scalar.
+        /// - Shifting the pointer by `idx` must yield a valid SIMD data pointer.
+        /// - If padding is needed, then `padding` must contain a valid scalar.
         unsafe fn deref_at<'target>(
             self,
             idx: usize,
@@ -107,9 +108,24 @@ mod experiment {
     #[derive(Copy, Clone)]
     #[doc(hidden)]
     pub struct ScalarPtr<V: SIMD> {
-        data: *const V::Scalar,
-        len: usize,
+        start: *const V::Scalar,
+        end: *const V::Scalar,
         _vector: PhantomData<V>,
+    }
+    //
+    impl<V: SIMD> ScalarPtr<V> {
+        /// Build from scalar slice raw parts
+        ///
+        /// # Safety
+        ///
+        /// `len` must not go past the end of `data`'s allocation.
+        unsafe fn new(data: *const V::Scalar, len: usize) -> Self {
+            Self {
+                start: data,
+                end: unsafe { data.add(len) },
+                _vector: PhantomData,
+            }
+        }
     }
     //
     // NOTE: Can't use V: SIMD bound here yet due to const generics limitations
@@ -122,11 +138,11 @@ mod experiment {
             idx: usize,
             padding: MaybeUninit<B>,
         ) -> Self::DerefResult<'target> {
-            let base_idx = idx * S;
-            let base_ptr = self.data.add(base_idx);
+            let base_ptr = self.start.add(idx * S);
             core::array::from_fn(|offset| {
-                if base_idx + offset < self.len {
-                    unsafe { *base_ptr.add(offset) }
+                let scalar_ptr = base_ptr.add(offset);
+                if scalar_ptr < self.end {
+                    unsafe { *scalar_ptr }
                 } else {
                     unsafe { padding.assume_init() }
                 }
@@ -139,9 +155,24 @@ mod experiment {
     #[derive(Copy, Clone)]
     #[doc(hidden)]
     pub struct ScalarPtrMut<V: SIMD> {
-        data: *mut V::Scalar,
-        len: usize,
+        start: *mut V::Scalar,
+        end: *mut V::Scalar,
         _vector: PhantomData<V>,
+    }
+    //
+    impl<V: SIMD> ScalarPtrMut<V> {
+        /// Build from scalar slice raw parts
+        ///
+        /// # Safety
+        ///
+        /// `len` must not go past the end of `data`'s allocation.
+        unsafe fn new(data: *mut V::Scalar, len: usize) -> Self {
+            Self {
+                start: data,
+                end: unsafe { data.add(len) },
+                _vector: PhantomData,
+            }
+        }
     }
     //
     // NOTE: Can't use V: SIMD bound here yet due to const generics limitations
@@ -156,18 +187,21 @@ mod experiment {
             idx: usize,
             padding: MaybeUninit<B>,
         ) -> Self::DerefResult<'target> {
-            let base_idx = idx * S;
-            let base_ptr = self.data.add(base_idx);
+            let base_ptr = self.start.add(idx * S);
             ScalarMutProxy {
                 vector: core::array::from_fn(|offset| {
-                    if base_idx + offset < self.len {
-                        unsafe { *base_ptr.add(offset) }
+                    let scalar_ptr = base_ptr.add(offset);
+                    if scalar_ptr < self.end {
+                        unsafe { *scalar_ptr }
                     } else {
                         unsafe { padding.assume_init() }
                     }
                 })
                 .into(),
-                target: core::slice::from_raw_parts_mut(base_ptr, self.len - base_idx),
+                target: core::slice::from_raw_parts_mut(
+                    base_ptr,
+                    self.end.offset_from(base_ptr) as usize,
+                ),
             }
         }
     }
@@ -480,11 +514,7 @@ mod experiment {
             );
             unsafe {
                 Vectors::new(
-                    ScalarPtr {
-                        data: self.as_ptr(),
-                        len: self.len(),
-                        _vector: PhantomData,
-                    },
+                    ScalarPtr::new(self.as_ptr(), self.len()),
                     self.len() / S + (self.len() % S != 0) as usize,
                     padding,
                 )
@@ -518,11 +548,7 @@ mod experiment {
             );
             unsafe {
                 Vectors::new(
-                    ScalarPtrMut {
-                        data: self.as_mut_ptr(),
-                        len: self.len(),
-                        _vector: PhantomData,
-                    },
+                    ScalarPtrMut::new(self.as_mut_ptr(), self.len()),
                     self.len() / S + (self.len() % S != 0) as usize,
                     padding,
                 )
