@@ -39,7 +39,7 @@ pub mod align {
     ///
     /// This is just a marker type for the enforcers, to avoid people putting the wrong parameter at
     /// the wrong place.
-    pub trait Align: Copy {}
+    pub trait Align: Copy + 'static {}
 
     macro_rules! align {
         ($name: ident, $align: expr) => {
