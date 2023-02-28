@@ -31,6 +31,8 @@ use crate::inner::Repr;
 use crate::vector::align::Align;
 use crate::Vector;
 
+// FIXME: This is an experiment to see how Vectorize could be extended to be
+//        more friendly to rustc's optimizer.
 mod experiment {
     use crate::{inner::Repr, vector::align::Align, Vector};
     use core::{
@@ -173,7 +175,7 @@ mod experiment {
     /// SIMD mutation proxy for scalar slices
     ///
     /// For mutation from &mut [Scalar], we can't provide an &mut Vector as it
-    /// would be misaligned and out of bounds, so we provide a proxy object
+    /// could get misaligned and out of bounds. So we provide a proxy object
     /// that mostly acts like &mut Vector instead.
     pub struct ScalarMutProxy<'target, V: SIMD> {
         vector: V,
