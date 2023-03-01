@@ -101,6 +101,7 @@ pub mod experimental {
         unsafe fn as_vectors_unchecked(self) -> Self::AsVectors;
 
         /// Attempt to cast this to the equivalent slice or collection of Vector
+        #[inline(always)]
         fn as_vectors(self) -> Option<Self::AsVectors> {
             self.is_vectors()
                 .then(|| unsafe { self.as_vectors_unchecked() })
@@ -144,6 +145,7 @@ pub mod experimental {
         /// # Safety
         ///
         /// The pointer's target must be valid for this lifetime
+        #[inline(always)]
         unsafe fn new(inner: *const T) -> Self {
             Self(inner, PhantomData)
         }
@@ -151,12 +153,14 @@ pub mod experimental {
     //
     // *const Vector yields Vector values
     unsafe impl<'target, V: VectorInfo> VectorSliceBase<V> for VectorPtr<'target, V> {
+        #[inline(always)]
         fn is_vectors(self) -> bool {
             true
         }
 
         type AsVectors = Self;
 
+        #[inline(always)]
         unsafe fn as_vectors_unchecked(self) -> Self {
             self
         }
@@ -178,12 +182,14 @@ pub mod experimental {
 
     // [Vector; SIZE] yields Vector values
     unsafe impl<V: VectorInfo, const SIZE: usize> VectorSliceBase<V> for [V; SIZE] {
+        #[inline(always)]
         fn is_vectors(self) -> bool {
             true
         }
 
         type AsVectors = Self;
 
+        #[inline(always)]
         unsafe fn as_vectors_unchecked(self) -> Self {
             self
         }
@@ -214,6 +220,7 @@ pub mod experimental {
         /// # Safety
         ///
         /// The pointer's target must be valid for this type's lifetime
+        #[inline(always)]
         unsafe fn new(inner: *mut T) -> Self {
             Self(inner, PhantomData)
         }
@@ -221,12 +228,14 @@ pub mod experimental {
     //
     // *mut Vector yields &mut Vector
     unsafe impl<'target, V: VectorInfo> VectorSliceBase<V> for VectorPtrMut<'target, V> {
+        #[inline(always)]
         fn is_vectors(self) -> bool {
             true
         }
 
         type AsVectors = Self;
 
+        #[inline(always)]
         unsafe fn as_vectors_unchecked(self) -> Self {
             self
         }
@@ -262,6 +271,7 @@ pub mod experimental {
         ///
         /// - `data` must be valid for the lifetime of this tagged pointer.
         /// - `len` must not go past the end of `data`'s allocation.
+        #[inline(always)]
         unsafe fn new(data: *const V::Scalar, len: usize) -> Self {
             Self {
                 start: data,
@@ -275,6 +285,7 @@ pub mod experimental {
     unsafe impl<'target, A: Align, B: Repr, const S: usize> VectorSliceBase<Vector<A, B, S>>
         for ScalarPtr<'target, Vector<A, B, S>>
     {
+        #[inline(always)]
         fn is_vectors(self) -> bool {
             let is_aligned =
                 |ptr: *const B| ptr as usize % core::mem::align_of::<Vector<A, B, S>>() == 0;
@@ -283,6 +294,7 @@ pub mod experimental {
 
         type AsVectors = VectorPtr<'target, Vector<A, B, S>>;
 
+        #[inline(always)]
         unsafe fn as_vectors_unchecked(self) -> Self::AsVectors {
             unsafe { VectorPtr::new(self.start.cast()) }
         }
@@ -332,6 +344,7 @@ pub mod experimental {
         ///
         /// - `data` must be valid for the lifetime of this tagged pointer.
         /// - `len` must not go past the end of `data`'s allocation.
+        #[inline(always)]
         unsafe fn new(data: *mut V::Scalar, len: usize) -> Self {
             Self {
                 start: data,
@@ -345,6 +358,7 @@ pub mod experimental {
     unsafe impl<'target, A: Align, B: Repr, const S: usize> VectorSliceBase<Vector<A, B, S>>
         for ScalarPtrMut<'target, Vector<A, B, S>>
     {
+        #[inline(always)]
         fn is_vectors(self) -> bool {
             let is_aligned =
                 |ptr: *mut B| ptr as usize % core::mem::align_of::<Vector<A, B, S>>() == 0;
@@ -353,6 +367,7 @@ pub mod experimental {
 
         type AsVectors = VectorPtrMut<'target, Vector<A, B, S>>;
 
+        #[inline(always)]
         unsafe fn as_vectors_unchecked(self) -> Self::AsVectors {
             unsafe { VectorPtrMut::new(self.start.cast()) }
         }
@@ -428,6 +443,7 @@ pub mod experimental {
                 V: VectorInfo
                 $(, $t: VectorSliceBase<V> + 'target)*
             > VectorSliceBase<V> for ($($t,)*) {
+                #[inline(always)]
                 fn is_vectors(self) -> bool {
                     let ($($t,)*) = self;
                     $(
@@ -440,6 +456,7 @@ pub mod experimental {
 
                 type AsVectors = ($($t::AsVectors,)*);
 
+                #[inline(always)]
                 unsafe fn as_vectors_unchecked(self) -> Self::AsVectors {
                     let ($($t,)*) = self;
                     unsafe { ($($t.as_vectors_unchecked(),)*) }
@@ -502,6 +519,7 @@ pub mod experimental {
         ///   during the lifetime 'source.
         /// - If any of the inner pointers require padding, then padding must
         ///   be initialized to a valid padding value.
+        #[inline(always)]
         unsafe fn new(base: Base, len: usize, padding: MaybeUninit<V::Scalar>) -> Self {
             Self { base, len, padding }
         }
@@ -580,8 +598,9 @@ pub mod experimental {
         //
         // The returned building blocks are...
         //
-        // - A mechanism for accessing the data as a slice of Vector
-        // - The number of Vector elements within that slice
+        // - A pointer-like entity for treating the data as a slice of Vector
+        //   (see VectorSliceBase for more information)
+        // - The number of Vector elements that this data contains
         // - The truth that this data needs padding
         //
         // This panics if called on a tuple of slices/containers who would not
