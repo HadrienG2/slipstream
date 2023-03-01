@@ -692,7 +692,7 @@ pub mod experimental {
         }
     }
     impl_iterator!(
-        /// Borrows iterator over Vectors' elements
+        /// Borrowing iterator over Vectors' elements
         (VectorsIter, Base::Element<'vectors>)
     );
     impl_iterator!(
