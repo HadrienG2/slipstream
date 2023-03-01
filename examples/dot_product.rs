@@ -111,7 +111,7 @@ macro_rules! generate_parallel_dot {
                 .zip(rhs.chunks_exact(CHUNK_ELEMS))
             {
                 // ...then over SIMD vectors inside the elements
-                for (acc, lvec, rvec) in (&mut accumulators[..], lchunk, rchunk).vectorize() {
+                for (acc, lvec, rvec) in (&mut accumulators, lchunk, rchunk).vectorize() {
                     if target_cfg_f!(target_feature = "fma") {
                         *acc = lvec.mul_add(rvec, *acc);
                     } else {

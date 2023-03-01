@@ -120,7 +120,7 @@ macro_rules! generate_mat_mult {
                         let lhs_elem_vec = V::splat(*lhs_elem);
 
                         // Add contribution from rhs chunk to the accumulator
-                        for (out_acc, rhs_vec) in (&mut out_accs[..], rhs_chunk).vectorize() {
+                        for (out_acc, rhs_vec) in (&mut out_accs, rhs_chunk).vectorize() {
                             if target_cfg_f!(target_feature = "fma") {
                                 *out_acc = lhs_elem_vec.mul_add(rhs_vec, *out_acc);
                             } else {
