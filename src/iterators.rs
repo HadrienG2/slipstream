@@ -36,6 +36,7 @@ use crate::Vector;
 pub mod experimental {
     use crate::{inner::Repr, vector::align::Align, Vector};
     use core::{
+        iter::FusedIterator,
         marker::PhantomData,
         mem::MaybeUninit,
         ops::{Deref, DerefMut},
@@ -86,10 +87,10 @@ pub mod experimental {
     /// - Users of this trait may rely all method implementations to be correct
     ///   for safety.
     #[doc(hidden)]
-    pub unsafe trait VectorSliceBase<V: VectorInfo>: Copy + Sized {
+    pub unsafe trait VectorSliceBase<V: VectorInfo>: Sized {
         /// Truth that this data may safely reinterpreted as a collection of
         /// Vectors using `as_vectors_unchecked()`
-        fn is_vectors(self) -> bool;
+        fn is_vectors(&self) -> bool;
 
         /// Result of calling `as_vectors_unchecked()`
         ///
@@ -112,26 +113,26 @@ pub mod experimental {
         /// - Vector for &[Vector], &[Scalar] and owned data
         /// - &mut Vector for &mut [Vector]
         /// - VectorMutProxy that behaves like &mut Vector for &mut [Scalar]
-        type Element<'result>
+        type Element<'result>: Sized
         where
             Self: 'result;
 
-        /// Access the underlying slice at vector index `idx` without bound or
-        /// lifetime checking, adding scalar padding values if data is missing
-        /// for the beginning or the end of the target vector.
+        /// Like Element, but with maximal lifetime
+        type OwnedElement: Sized;
+
+        /// Access the underlying slice at vector index `idx` without bounds
+        /// checking, adding scalar padding values if data is missing at the
+        /// end of the target vector.
         ///
         /// # Safety
         ///
-        /// - The underlying slice must be valid for lifetime `'result`.
         /// - Index `idx` must be in within the bounds of the underlying slice.
         /// - If padding is needed, then `padding` must contain a valid scalar.
-        unsafe fn get_unchecked<'result>(
-            self,
+        unsafe fn get_unchecked(
+            &mut self,
             idx: usize,
             padding: MaybeUninit<V::Scalar>,
-        ) -> Self::Element<'result>
-        where
-            Self: 'result;
+        ) -> Self::Element<'_>;
     }
 
     /// *const T tagged with a lifetime
@@ -154,7 +155,7 @@ pub mod experimental {
     // *const Vector yields Vector values
     unsafe impl<'target, V: VectorInfo> VectorSliceBase<V> for VectorPtr<'target, V> {
         #[inline(always)]
-        fn is_vectors(self) -> bool {
+        fn is_vectors(&self) -> bool {
             true
         }
 
@@ -167,15 +168,10 @@ pub mod experimental {
 
         type Element<'result> = V where Self: 'result;
 
+        type OwnedElement = V;
+
         #[inline(always)]
-        unsafe fn get_unchecked<'result>(
-            self,
-            idx: usize,
-            _padding: MaybeUninit<V::Scalar>,
-        ) -> Self::Element<'result>
-        where
-            Self: 'result,
-        {
+        unsafe fn get_unchecked(&mut self, idx: usize, _padding: MaybeUninit<V::Scalar>) -> V {
             unsafe { *self.0.add(idx) }
         }
     }
@@ -183,7 +179,7 @@ pub mod experimental {
     // [Vector; SIZE] yields Vector values
     unsafe impl<V: VectorInfo, const SIZE: usize> VectorSliceBase<V> for [V; SIZE] {
         #[inline(always)]
-        fn is_vectors(self) -> bool {
+        fn is_vectors(&self) -> bool {
             true
         }
 
@@ -196,21 +192,15 @@ pub mod experimental {
 
         type Element<'result> = V;
 
+        type OwnedElement = V;
+
         #[inline(always)]
-        unsafe fn get_unchecked<'result>(
-            self,
-            idx: usize,
-            _padding: MaybeUninit<V::Scalar>,
-        ) -> Self::Element<'result>
-        where
-            Self: 'result,
-        {
+        unsafe fn get_unchecked(&mut self, idx: usize, _padding: MaybeUninit<V::Scalar>) -> V {
             unsafe { *<[V]>::get_unchecked(&self[..], idx) }
         }
     }
 
     /// *mut T tagged with a lifetime
-    #[derive(Copy, Clone)]
     #[doc(hidden)]
     pub struct VectorPtrMut<'target, T>(*mut T, PhantomData<&'target mut [T]>);
     //
@@ -229,7 +219,7 @@ pub mod experimental {
     // *mut Vector yields &mut Vector
     unsafe impl<'target, V: VectorInfo> VectorSliceBase<V> for VectorPtrMut<'target, V> {
         #[inline(always)]
-        fn is_vectors(self) -> bool {
+        fn is_vectors(&self) -> bool {
             true
         }
 
@@ -242,15 +232,10 @@ pub mod experimental {
 
         type Element<'result> = &'result mut V where Self: 'result;
 
+        type OwnedElement = Self::Element<'target>;
+
         #[inline(always)]
-        unsafe fn get_unchecked<'result>(
-            self,
-            idx: usize,
-            _padding: MaybeUninit<V::Scalar>,
-        ) -> Self::Element<'result>
-        where
-            Self: 'result,
-        {
+        unsafe fn get_unchecked(&mut self, idx: usize, _padding: MaybeUninit<V::Scalar>) -> &mut V {
             unsafe { &mut *self.0.add(idx) }
         }
     }
@@ -286,7 +271,7 @@ pub mod experimental {
         for ScalarPtr<'target, Vector<A, B, S>>
     {
         #[inline(always)]
-        fn is_vectors(self) -> bool {
+        fn is_vectors(&self) -> bool {
             let is_aligned =
                 |ptr: *const B| ptr as usize % core::mem::align_of::<Vector<A, B, S>>() == 0;
             is_aligned(self.start) && is_aligned(self.end)
@@ -301,15 +286,14 @@ pub mod experimental {
 
         type Element<'result> = Vector<A, B, S> where Self: 'result;
 
+        type OwnedElement = Vector<A, B, S>;
+
         #[inline(always)]
-        unsafe fn get_unchecked<'result>(
-            self,
+        unsafe fn get_unchecked(
+            &mut self,
             idx: usize,
             padding: MaybeUninit<B>,
-        ) -> Self::Element<'result>
-        where
-            Self: 'result,
-        {
+        ) -> Self::Element<'_> {
             let base_ptr = self.start.add(idx * S);
             core::array::from_fn(|offset| {
                 let scalar_ptr = base_ptr.add(offset);
@@ -329,7 +313,6 @@ pub mod experimental {
     //       generic parameters are not allowed yet.
 
     /// *mut Vector approximation for access from &mut [Scalar]
-    #[derive(Copy, Clone)]
     #[doc(hidden)]
     pub struct ScalarPtrMut<'target, V: VectorInfo> {
         start: *mut V::Scalar,
@@ -359,7 +342,7 @@ pub mod experimental {
         for ScalarPtrMut<'target, Vector<A, B, S>>
     {
         #[inline(always)]
-        fn is_vectors(self) -> bool {
+        fn is_vectors(&self) -> bool {
             let is_aligned =
                 |ptr: *mut B| ptr as usize % core::mem::align_of::<Vector<A, B, S>>() == 0;
             is_aligned(self.start) && is_aligned(self.end)
@@ -374,15 +357,14 @@ pub mod experimental {
 
         type Element<'result> = VectorMutProxy<'result, Vector<A, B, S>> where Self: 'result;
 
+        type OwnedElement = Self::Element<'target>;
+
         #[inline(always)]
-        unsafe fn get_unchecked<'result>(
-            self,
+        unsafe fn get_unchecked(
+            &mut self,
             idx: usize,
             padding: MaybeUninit<B>,
-        ) -> Self::Element<'result>
-        where
-            Self: 'result,
-        {
+        ) -> Self::Element<'_> {
             let base_ptr = self.start.add(idx * S);
             VectorMutProxy {
                 vector: core::array::from_fn(|offset| {
@@ -444,7 +426,7 @@ pub mod experimental {
                 $(, $t: VectorSliceBase<V> + 'target)*
             > VectorSliceBase<V> for ($($t,)*) {
                 #[inline(always)]
-                fn is_vectors(self) -> bool {
+                fn is_vectors(&self) -> bool {
                     let ($($t,)*) = self;
                     $(
                         if !$t.is_vectors() {
@@ -464,14 +446,14 @@ pub mod experimental {
 
                 type Element<'result> = ($($t::Element<'result>,)*) where Self: 'result;
 
+                type OwnedElement = ($($t::OwnedElement,)*);
+
                 #[inline(always)]
-                unsafe fn get_unchecked<'result>(
-                    self,
+                unsafe fn get_unchecked(
+                    &mut self,
                     idx: usize,
                     padding: MaybeUninit<V::Scalar>
-                ) -> Self::Element<'result>
-                    where Self: 'result
-                {
+                ) -> Self::Element<'_> {
                     let ($($t,)*) = self;
                     unsafe { ($($t.get_unchecked(idx, padding),)*)  }
                 }
@@ -524,10 +506,45 @@ pub mod experimental {
             Self { base, len, padding }
         }
 
-        /// Access the N-th element of the container
-        ///
-        /// See [the top-level type description](`Vectors`) to know what type
-        /// of element this operation yields.
+        /// Returns the number of elements in the container
+        #[inline(always)]
+        pub const fn len(&self) -> usize {
+            self.len
+        }
+
+        /// Returns `true` if there are no elements in the container
+        #[inline(always)]
+        pub const fn is_empty(&self) -> bool {
+            self.len == 0
+        }
+
+        /// Returns the first element, or None if the container is empty
+        #[inline(always)]
+        pub fn first(&mut self) -> Option<Base::Element<'_>> {
+            self.get(0)
+        }
+
+        // TODO: split_(first|last)
+
+        /// Returns the last element, or None if the container is empty
+        #[inline(always)]
+        pub fn last(&mut self) -> Option<Base::Element<'_>> {
+            self.get(self.len - 1)
+        }
+
+        /// Returns the N-th element of the container
+        // TODO: Generalize to subslices, but without using SliceIndex since
+        //       that's not in stable Rust.
+        #[inline(always)]
+        pub fn get(&mut self, idx: usize) -> Option<Base::Element<'_>> {
+            if (0..self.len).contains(&idx) {
+                Some(unsafe { self.get_unchecked(idx) })
+            } else {
+                None
+            }
+        }
+
+        /// Returns the N-th element of the container without bounds checking
         ///
         /// # Safety
         ///
@@ -537,16 +554,151 @@ pub mod experimental {
             unsafe { self.base.get_unchecked(idx, self.padding) }
         }
 
-        /// Get the number of elements stored in this container
+        /// Iterate over container elements
         #[inline(always)]
-        pub fn len(&self) -> usize {
-            self.len
+        pub fn iter(&mut self) -> VectorsIter<V, Base> {
+            <&mut Self>::into_iter(self)
         }
 
-        // TODO: Implement iter, IntoIterator, r?(array_)?chunks(_exact)?,
-        //       first, get, is_empty, last, r?splitn?, split_at(_unchecked)?
-        //       split_(first|last), split_inclusive, r?split_array, windows, Index
+        // TODO: windows, chunks(_exact)?, array_chunks, rchunks(_exact)?,
+        //       split_at, r?split_array, split(_inclusive)?,
+        //       rsplit(_inclusive)?, r?splitn
+        // TODO: Index by anything that get accepts
     }
+
+    macro_rules! impl_iterator {
+        (
+            $(#[$attr:meta])*
+            ($name:ident, Base::$elem:ident$(<$lifetime:lifetime>)?)
+        ) => {
+            impl<$($lifetime,)? V: VectorInfo, Base: VectorSliceBase<V> $( + $lifetime)?> IntoIterator
+                for $(&$lifetime mut)? Vectors<V, Base>
+            {
+                type Item = Base::$elem $(<$lifetime>)?;
+                type IntoIter = $name<$($lifetime,)? V, Base>;
+
+                #[inline(always)]
+                fn into_iter(self) -> Self::IntoIter {
+                    let end = self.len;
+                    Self::IntoIter {
+                        vectors: self,
+                        start: 0,
+                        end,
+                    }
+                }
+            }
+
+            $(#[$attr])*
+            pub struct $name<$($lifetime,)? V: VectorInfo, Base: VectorSliceBase<V>> {
+                vectors: $(&$lifetime mut)? Vectors<V, Base>,
+                start: usize,
+                end: usize,
+            }
+            //
+            impl<$($lifetime,)? V: VectorInfo, Base: VectorSliceBase<V>> $name<$($lifetime,)? V, Base> {
+                /// Get the i-th element
+                ///
+                /// # Safety
+                ///
+                /// - This should only be called once per index, i.e. you must ensure
+                ///   that the iterator will not visit this index again.
+                /// - This should only be called for valid indices of the underlying Vectors.
+                #[inline(always)]
+                unsafe fn get_elem<'iter>(&'iter mut self, idx: usize) -> Base::$elem$(<$lifetime>)? {
+                    debug_assert!(idx < self.vectors.len());
+                    let result = unsafe { self.vectors.get_unchecked(idx) };
+                    unsafe { core::mem::transmute_copy::<Base::Element<'iter>, Base::$elem$(<$lifetime>)?>(&result) }
+                }
+            }
+            //
+            impl<$($lifetime,)? V: VectorInfo, Base: VectorSliceBase<V>> Iterator
+                for $name<$($lifetime,)? V, Base>
+            {
+                type Item = Base::$elem$(<$lifetime>)?;
+
+                #[inline(always)]
+                fn next<'iter>(&'iter mut self) -> Option<Self::Item> {
+                    if self.start < self.end {
+                        self.start += 1;
+                        Some(unsafe { self.get_elem(self.start - 1) })
+                    } else {
+                        None
+                    }
+                }
+
+                #[inline(always)]
+                fn size_hint(&self) -> (usize, Option<usize>) {
+                    (self.len(), Some(self.len()))
+                }
+
+                #[inline(always)]
+                fn count(self) -> usize {
+                    self.len()
+                }
+
+                #[inline(always)]
+                fn last(mut self) -> Option<Self::Item> {
+                    self.next_back()
+                }
+
+                #[inline(always)]
+                fn nth(&mut self, n: usize) -> Option<Self::Item> {
+                    if self.start.checked_add(n)? < self.end {
+                        self.start += n - 1;
+                        self.next()
+                    } else {
+                        None
+                    }
+                }
+            }
+            //
+            impl<$($lifetime,)? V: VectorInfo, Base: VectorSliceBase<V>> DoubleEndedIterator
+                for $name<$($lifetime,)? V, Base>
+            {
+                #[inline(always)]
+                fn next_back(&mut self) -> Option<Self::Item> {
+                    if self.start < self.end {
+                        self.end -= 1;
+                        Some(unsafe { self.get_elem(self.end + 1) })
+                    } else {
+                        None
+                    }
+                }
+
+                #[inline(always)]
+                fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+                    if self.start < self.end.checked_sub(n)? {
+                        self.end -= n - 1;
+                        self.next_back()
+                    } else {
+                        None
+                    }
+                }
+            }
+            //
+            impl<$($lifetime,)? V: VectorInfo, Base: VectorSliceBase<V>> ExactSizeIterator
+                for $name<$($lifetime,)? V, Base>
+            {
+                #[inline(always)]
+                fn len(&self) -> usize {
+                    self.end - self.start
+                }
+            }
+            //
+            impl<$($lifetime,)? V: VectorInfo, Base: VectorSliceBase<V>> FusedIterator
+                for $name<$($lifetime,)? V, Base>
+            {
+            }
+        }
+    }
+    impl_iterator!(
+        /// Borrows iterator over Vectors' elements
+        (VectorsIter, Base::Element<'vectors>)
+    );
+    impl_iterator!(
+        /// Owned iterator over Vectors' elements
+        (VectorsIntoIter, Base::OwnedElement)
+    );
 
     // === Step 3: Translate from scalar slices and containers to vector slices ===
 
@@ -635,10 +787,14 @@ pub mod experimental {
         /// vector lanes, padding will be inserted where incomplete Vectors
         /// would be produced, to fill in the missing vector lanes.
         ///
+        /// The use of padding makes it harder for the compiler to optimize the
+        /// code even if the padding ends up not being used.
+        ///
         /// # Panics
         ///
         /// - If called on a tuple and not all tuple elements yield the same
         ///   amount of SIMD elements.
+        #[inline(always)]
         fn vectorize_pad(self, padding: V::Scalar) -> Vectors<V, Self::VectorSliceBase> {
             let (base, len, _needs_padding) = self.prepare_vectors();
             unsafe { Vectors::new(base, len, MaybeUninit::new(padding)) }
