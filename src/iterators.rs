@@ -295,6 +295,8 @@ pub mod experimental {
             padding: MaybeUninit<B>,
         ) -> Self::Element<'_> {
             let base_ptr = self.start.add(idx * S);
+            // FIXME: Can't use array::from_fn in perf-sensitive code as it is
+            //        not marked inline and may actually not be inlined...
             core::array::from_fn(|offset| {
                 let scalar_ptr = base_ptr.wrapping_add(offset);
                 if scalar_ptr < self.end {
@@ -367,6 +369,9 @@ pub mod experimental {
         ) -> Self::Element<'_> {
             let base_ptr = self.start.add(idx * S);
             VectorMutProxy {
+                // FIXME: Can't use array::from_fn in perf-sensitive code as it is
+                //        not marked inline and may actually not be inlined...
+                // FIXME: This code is redundant with ScalarPtr, deduplicate it
                 vector: core::array::from_fn(|offset| {
                     let scalar_ptr = base_ptr.wrapping_add(offset);
                     if scalar_ptr < self.end {
@@ -573,6 +578,8 @@ pub mod experimental {
             let mut iter = self.iter();
             core::iter::from_fn(move || {
                 if iter.len() >= N {
+                    // FIXME: Can't use array::from_fn in perf-sensitive code as
+                    //        it may not be inlined...
                     Some(core::array::from_fn(|_| iter.next().unwrap()))
                 } else {
                     None
@@ -879,12 +886,36 @@ pub mod experimental {
         }
     }
 
-    unsafe impl<V: VectorInfo, const SIZE: usize> Vectorizable<V> for [V; SIZE] {
-        type VectorSliceBase = [V; SIZE];
+    unsafe impl<A: Align, B: Repr, const S: usize, const ARRAY_SIZE: usize>
+        Vectorizable<Vector<A, B, S>> for [Vector<A, B, S>; ARRAY_SIZE]
+    {
+        type VectorSliceBase = [Vector<A, B, S>; ARRAY_SIZE];
 
         #[inline(always)]
-        fn prepare_vectors(self) -> ([V; SIZE], usize, bool) {
-            (self, SIZE, false)
+        fn prepare_vectors(self) -> (Self::VectorSliceBase, usize, bool) {
+            (self, ARRAY_SIZE, false)
+        }
+    }
+
+    unsafe impl<'target, A: Align, B: Repr, const S: usize, const ARRAY_SIZE: usize>
+        Vectorizable<Vector<A, B, S>> for &'target [Vector<A, B, S>; ARRAY_SIZE]
+    {
+        type VectorSliceBase = VectorPtr<'target, Vector<A, B, S>>;
+
+        #[inline(always)]
+        fn prepare_vectors(self) -> (Self::VectorSliceBase, usize, bool) {
+            self.as_slice().prepare_vectors()
+        }
+    }
+
+    unsafe impl<'target, A: Align, B: Repr, const S: usize, const ARRAY_SIZE: usize>
+        Vectorizable<Vector<A, B, S>> for &'target mut [Vector<A, B, S>; ARRAY_SIZE]
+    {
+        type VectorSliceBase = VectorPtrMut<'target, Vector<A, B, S>>;
+
+        #[inline(always)]
+        fn prepare_vectors(self) -> (Self::VectorSliceBase, usize, bool) {
+            self.as_mut_slice().prepare_vectors()
         }
     }
 
@@ -963,7 +994,7 @@ pub mod experimental {
                         }
 
                         // If at least one field needs padding, the tuple does
-                        if !t_needs_padding {
+                        if t_needs_padding {
                             needs_padding = true;
                         }
                     )*
