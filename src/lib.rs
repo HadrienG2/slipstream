@@ -259,7 +259,7 @@ pub mod types;
 pub mod vector;
 pub mod vectorize;
 
-pub use iterators::Vectorizable;
+pub use iterators::experimental::Vectorizable;
 pub use mask::Mask;
 pub use types::*;
 pub use vector::Vector;
@@ -405,6 +405,8 @@ mod inner {
     }
 }
 
+/* FIXME: Make these work
+
 /// Free-standing version of [`Vectorizable::vectorize`].
 ///
 /// This is the same as `a.vectorize()`. Nevertheless, this version might be more convenient as it
@@ -441,7 +443,7 @@ where
     A: Vectorizable<V>,
 {
     a.vectorize_pad(pad)
-}
+} */
 
 #[cfg(test)]
 mod tests {

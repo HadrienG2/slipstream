@@ -111,29 +111,7 @@ macro_rules! generate_parallel_dot {
                 .zip(rhs.chunks_exact(CHUNK_ELEMS))
             {
                 // ...then over SIMD vectors inside the elements
-                //
-                // FIXME: Must manually replicate the job of vectorize() here
-                //        because the implementation of vectorize does not let
-                //        the compiler know which slices are equally sized, and
-                //        in tight loops this is very important.
-                //
-                #[inline(always)]
-                fn vectorize_slice(s: &[Scalar]) -> impl Iterator<Item = V> + '_ {
-                    assert_eq!(s.len() % V::LANES, 0);
-                    s.chunks_exact(V::LANES).map(V::new)
-                }
-                //
-                #[inline(always)]
-                fn vectorize_pair<'a>(
-                    s1: &'a [Scalar],
-                    s2: &'a [Scalar],
-                ) -> impl Iterator<Item = (V, V)> + 'a {
-                    vectorize_slice(s1).zip(vectorize_slice(s2))
-                }
-                //
-                for (acc, (lvec, rvec)) in
-                    accumulators.iter_mut().zip(vectorize_pair(lchunk, rchunk))
-                {
+                for (acc, lvec, rvec) in (&mut accumulators[..], lchunk, rchunk).vectorize() {
                     if target_cfg_f!(target_feature = "fma") {
                         *acc = lvec.mul_add(rvec, *acc);
                     } else {

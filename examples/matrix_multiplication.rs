@@ -120,17 +120,7 @@ macro_rules! generate_mat_mult {
                         let lhs_elem_vec = V::splat(*lhs_elem);
 
                         // Add contribution from rhs chunk to the accumulator
-                        //
-                        // FIXME: Must manually replicate the job of vectorize()
-                        //        here because the implementation of vectorize
-                        //        does not let the compiler know which slices
-                        //        are equally sized, and in tight loops this is
-                        //        very important.
-                        //
-                        for (out_acc, rhs_vec) in out_accs
-                            .iter_mut()
-                            .zip(rhs_chunk.chunks_exact(V::LANES).map(V::new))
-                        {
+                        for (out_acc, rhs_vec) in (&mut out_accs[..], rhs_chunk).vectorize() {
                             if target_cfg_f!(target_feature = "fma") {
                                 *out_acc = lhs_elem_vec.mul_add(rhs_vec, *out_acc);
                             } else {
@@ -140,17 +130,8 @@ macro_rules! generate_mat_mult {
                     }
 
                     // Spill output accumulators into output storage
-                    //
-                    // FIXME: Must manually replicate the job of vectorize()
-                    //        here because the implementation of vectorize
-                    //        does not let the compiler know which slices
-                    //        are equally sized, and in tight loops this is
-                    //        very important.
-                    //
-                    for (out_chunk, out_acc) in
-                        out_chunk.chunks_exact_mut(V::LANES).zip(out_accs.iter())
-                    {
-                        out_acc.store(out_chunk);
+                    for (mut out_chunk, out_acc) in (out_chunk, out_accs).vectorize() {
+                        *out_chunk = out_acc;
                     }
                 }
             }
