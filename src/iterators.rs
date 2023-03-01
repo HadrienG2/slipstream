@@ -534,7 +534,7 @@ pub mod experimental {
 
         /// Returns the N-th element of the container
         // TODO: Generalize to subslices, but without using SliceIndex since
-        //       that's not in stable Rust.
+        //       that's not yet in stable Rust.
         #[inline(always)]
         pub fn get(&mut self, idx: usize) -> Option<Base::Element<'_>> {
             if (0..self.len).contains(&idx) {
@@ -554,14 +554,33 @@ pub mod experimental {
             unsafe { self.base.get_unchecked(idx, self.padding) }
         }
 
-        /// Iterate over container elements
+        /// Returns an iterator over contained elements
         #[inline(always)]
         pub fn iter(&mut self) -> VectorsIter<V, Base> {
             <&mut Self>::into_iter(self)
         }
 
-        // TODO: windows, chunks(_exact)?, array_chunks, rchunks(_exact)?,
-        //       split_at, r?split_array, split(_inclusive)?,
+        // TODO: chunks(_exact)?,
+
+        /// Returns an iterator over N elements at a time, starting at the
+        /// beginning of the container
+        // TODO: Make a dedicated Iterator so I can implement DoubleEnded + ExactSize + Fused
+        //       and add a remainder
+        #[inline(always)]
+        pub fn array_chunks<const N: usize>(
+            &mut self,
+        ) -> impl Iterator<Item = [Base::Element<'_>; N]> {
+            let mut iter = self.iter();
+            core::iter::from_fn(move || {
+                if iter.len() >= N {
+                    Some(core::array::from_fn(|_| iter.next().unwrap()))
+                } else {
+                    None
+                }
+            })
+        }
+
+        // TODO: rchunks(_exact)?, split_at, r?split_array, split(_inclusive)?,
         //       rsplit(_inclusive)?, r?splitn
         // TODO: Index by anything that get accepts
     }
