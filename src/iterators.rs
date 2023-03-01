@@ -36,7 +36,6 @@ use crate::Vector;
 pub mod experimental {
     use crate::{inner::Repr, vector::align::Align, Vector};
     use core::{
-        hint::unreachable_unchecked,
         iter::FusedIterator,
         marker::PhantomData,
         mem::MaybeUninit,
@@ -295,25 +294,18 @@ pub mod experimental {
             idx: usize,
             padding: MaybeUninit<B>,
         ) -> Self::Element<'_> {
-            let mut array = MaybeUninit::<[B; S]>::uninit();
-            let mut in_ptr = self.start.add(idx * S);
-            if in_ptr >= self.end {
-                unreachable_unchecked();
-            }
-
-            let mut out_ptr = array.as_mut_ptr().cast::<B>();
-            for _ in 0..S {
-                let elem;
-                if in_ptr < self.end {
-                    elem = *in_ptr;
-                    in_ptr = in_ptr.add(1);
+            let base_ptr = self.start.add(idx * S);
+            // FIXME: Can't use array::from_fn in perf-sensitive code as it is
+            //        not marked inline and may actually not be inlined...
+            core::array::from_fn(|offset| {
+                let scalar_ptr = base_ptr.wrapping_add(offset);
+                if scalar_ptr < self.end {
+                    unsafe { *scalar_ptr }
                 } else {
-                    elem = padding.assume_init();
+                    unsafe { padding.assume_init() }
                 }
-                *out_ptr = elem;
-                out_ptr = out_ptr.add(1);
-            }
-            array.assume_init().into()
+            })
+            .into()
         }
     }
 
