@@ -84,7 +84,7 @@ pub mod experimental {
     ///
     /// # Safety
     ///
-    /// - Users of this trait may rely all method implementations to be correct
+    /// - Users of this trait may rely on method implementations to be correct
     ///   for safety.
     #[doc(hidden)]
     pub unsafe trait VectorSliceBase<V: VectorInfo>: Sized {
@@ -296,7 +296,7 @@ pub mod experimental {
         ) -> Self::Element<'_> {
             let base_ptr = self.start.add(idx * S);
             core::array::from_fn(|offset| {
-                let scalar_ptr = base_ptr.add(offset);
+                let scalar_ptr = base_ptr.wrapping_add(offset);
                 if scalar_ptr < self.end {
                     unsafe { *scalar_ptr }
                 } else {
@@ -326,7 +326,7 @@ pub mod experimental {
         /// # Safety
         ///
         /// - `data` must be valid for the lifetime of this tagged pointer.
-        /// - `len` must not go past the end of `data`'s allocation.
+        /// - `data.add(len)` must not go past the end of `data`'s allocation.
         #[inline(always)]
         unsafe fn new(data: *mut V::Scalar, len: usize) -> Self {
             Self {
@@ -368,7 +368,7 @@ pub mod experimental {
             let base_ptr = self.start.add(idx * S);
             VectorMutProxy {
                 vector: core::array::from_fn(|offset| {
-                    let scalar_ptr = base_ptr.add(offset);
+                    let scalar_ptr = base_ptr.wrapping_add(offset);
                     if scalar_ptr < self.end {
                         unsafe { *scalar_ptr }
                     } else {
