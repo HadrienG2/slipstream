@@ -98,20 +98,16 @@ macro_rules! generate_parallel_dot {
             // Set up one accumulator per instruction stream
             let mut accumulators = [V::default(); CHUNK_VECS];
 
-            // Let the compiler know that input vectors are the same size
-            let lhs = &lhs.0[..];
-            let rhs = &rhs.0[..lhs.len()];
-
             // Work as in simple_dot, but with multiple SIMD accumulators
             // operating over larger chunks of elements...
-            const CHUNK_ELEMS: usize = CHUNK_VECS * V::LANES;
-            assert_eq!(lhs.len() % CHUNK_ELEMS, 0);
-            for (lchunk, rchunk) in lhs
-                .chunks_exact(CHUNK_ELEMS)
-                .zip(rhs.chunks_exact(CHUNK_ELEMS))
+            // FIXME: array_chunks does not codegen well in this case, need
+            //        actual dynamic chunks
+            for input_chunk in (&lhs.0[..], &rhs.0[..])
+                .vectorize()
+                .array_chunks::<CHUNK_VECS>()
             {
                 // ...then over SIMD vectors inside the elements
-                for (acc, lvec, rvec) in (&mut accumulators, lchunk, rchunk).vectorize() {
+                for (acc, &(lvec, rvec)) in accumulators.iter_mut().zip(input_chunk.iter()) {
                     if target_cfg_f!(target_feature = "fma") {
                         *acc = lvec.mul_add(rvec, *acc);
                     } else {
