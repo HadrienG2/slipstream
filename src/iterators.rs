@@ -1102,11 +1102,11 @@ pub mod experimental {
         mut merge: impl FnMut(Res, Res) -> Res,
     ) -> Res {
         let streams = array_from_fn(|offset| iter.clone().skip(offset).step_by(STREAMS));
-        reduce_accumulators(streams.map(sum_like), merge)
+        reduce_ilp_accumulators(streams.map(sum_like), merge)
     }
     //
     /// Generic ILP accumulator reduction
-    fn reduce_accumulators<const STREAMS: usize, Acc>(
+    fn reduce_ilp_accumulators<const STREAMS: usize, Acc>(
         accs: [Acc; STREAMS],
         merge: impl FnMut(Acc, Acc) -> Acc,
     ) -> Acc {
