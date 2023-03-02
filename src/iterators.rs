@@ -40,9 +40,29 @@ pub mod experimental {
         marker::PhantomData,
         mem::MaybeUninit,
         ops::{Deref, DerefMut},
+        ptr::NonNull,
     };
 
-    // === Step 1: Abstraction over SIMD data access ===
+    // === Step 0: General utilities that probably belong elsewhere ===
+
+    /// Build an array using a mapping from index to value
+    ///
+    /// This may look suspiciously like `std::array::from_fn()`, because it is
+    /// actually a clone of that function. Unfortunately, at the time of
+    /// writing, it does not optimize well because the compiler fails to inline
+    /// some steps, so we need to clone it for performance...
+    #[inline(always)]
+    fn array_from_fn<T, const SIZE: usize>(mut idx_to_elem: impl FnMut(usize) -> T) -> [T; SIZE] {
+        let mut result = MaybeUninit::<[T; SIZE]>::uninit();
+        unsafe {
+            let mut out_ptr = result.as_mut_ptr().cast::<T>();
+            for idx in 0..SIZE {
+                *out_ptr = idx_to_elem(idx);
+                out_ptr = out_ptr.add(1);
+            }
+            result.assume_init()
+        }
+    }
 
     /// Query the configuration of a Vector type
     ///
@@ -51,7 +71,6 @@ pub mod experimental {
     /// Users of this trait may rely on the provided information to be correct
     /// for safety.
     //
-    // TODO: Should probably be elsewhere in the crate
     pub unsafe trait VectorInfo: AsRef<[Self::Scalar]> + Copy + Sized + 'static {
         /// Inner scalar type (commonly called B in generics)
         type Scalar: Copy + Sized + 'static;
@@ -63,8 +82,20 @@ pub mod experimental {
         /// but Rust does not support asserting this at the moment)
         type Array: Copy + Sized + 'static;
 
+        /// Assert that Self is an overaligned Self::Array
+        ///
+        /// We hope this would be true, but it's not actually guaranteed by Rust
+        /// for non-repr(transparent) types and we rely on it for safety here...
+        #[inline(always)]
+        fn assert_overaligned_array() {
+            assert_eq!(
+                core::mem::size_of::<Self>(),
+                core::mem::size_of::<Self::Array>()
+            )
+        }
+
         /// Build from an index -> element mapping
-        fn from_fn(mapping: impl FnMut(usize) -> Self::Scalar) -> Self;
+        fn from_fn(idx_to_elem: impl FnMut(usize) -> Self::Scalar) -> Self;
     }
     //
     unsafe impl<A: Align, B: Repr, const S: usize> VectorInfo for Vector<A, B, S> {
@@ -72,13 +103,13 @@ pub mod experimental {
         const LANES: usize = S;
         type Array = [B; S];
 
-        // FIXME: Can't use array::from_fn in perf-sensitive code as it is
-        //        not marked inline and may actually not be inlined... But this
-        //        will go away during padding reform anyhow
-        fn from_fn(mapping: impl FnMut(usize) -> Self::Scalar) -> Self {
-            core::array::from_fn(mapping).into()
+        #[inline(always)]
+        fn from_fn(idx_to_elem: impl FnMut(usize) -> Self::Scalar) -> Self {
+            array_from_fn(idx_to_elem).into()
         }
     }
+
+    // === Step 1: Abstraction over SIMD data access ===
 
     /// Vectorizable data reinterpreted as a slice of `Vector`s
     ///
@@ -105,13 +136,16 @@ pub mod experimental {
     /// implementation detail of this crate, therefore this trait should not
     /// be implemented outside of this crate.
     pub unsafe trait Vectorized<V: VectorInfo>: Sized {
+        /// Owned element of the output `Vectors` collection
+        type Element: Sized;
+
         /// Borrowed element of the output `Vectors` collection
         type ElementRef<'result>: Sized
         where
             Self: 'result;
 
-        /// Owned element of the output `Vectors` collection
-        type Element: Sized;
+        /// Reinterpretation of this data as SIMD data that may not be aligned
+        type Unaligned: Vectorized<V> + VectorizedImpl<V>;
 
         /// Reinterpretation of this data as SIMD data with optimal layout
         type Aligned: Vectorized<V> + VectorizedImpl<V>;
@@ -133,15 +167,6 @@ pub mod experimental {
     /// implement the `[Vector]::get_unchecked(idx)` operation of the slice,
     /// like `*ptr.add(idx)` would in a real slice.
     ///
-    // FIXME: Remove this paragraph after padding cleanup
-    /// Unlike the normal `[T]::get_unchecked` operation, however, the
-    /// `get_unchecked` operation of this type accounts for the possibility that
-    /// some slice values may not be present in the underlying storage, and may
-    /// need to be replaced by a placeholder scalar padding value, typically set
-    /// to the neutral element of the computation being performed. This is
-    /// needed when wrapping slices of scalars, whose length may not be a
-    /// multiple of the SIMD vector width.
-    ///
     /// # Safety
     ///
     /// Unsafe code may rely on the correctness of implementations of this trait
@@ -157,35 +182,36 @@ pub mod experimental {
     /// the underlying element type is `Copy`.
     #[doc(hidden)]
     pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
-        /// Truth that this data may safely reinterpreted as a slice or
-        /// collection of `Vector` using `as_aligned_unchecked()`
-        fn is_aligned(&self) -> bool;
-
-        /// Unsafely cast this data to the equivalent slice or collection of Vector.
-        unsafe fn as_aligned_unchecked(self) -> Self::Aligned;
-
-        /// Attempt to cast this to the equivalent slice or collection of Vector,
-        /// return None if it is not safe to do so.
-        #[inline(always)]
-        fn as_aligned(self) -> Option<Self::Aligned> {
-            self.is_aligned()
-                .then(|| unsafe { self.as_aligned_unchecked() })
-        }
-
-        // FIXME: Clean up during padding cleanup
         /// Access the underlying slice at vector index `idx` without bounds
         /// checking, adding scalar padding values if data is missing at the
         /// end of the target vector.
         ///
+        /// `is_last` is the truth that the last element of the slice is being
+        /// targeted (and thus scalar data may require padding).
+        ///
         /// # Safety
         ///
         /// - Index `idx` must be in within the bounds of the underlying slice.
-        /// - If padding is needed, then `padding` must contain a valid scalar.
-        unsafe fn get_unchecked(
-            &mut self,
-            idx: usize,
-            padding: MaybeUninit<V::Scalar>,
-        ) -> Self::ElementRef<'_>;
+        /// - `is_last` must be true if and only if the last element of the
+        ///   slice is being accessed.
+        unsafe fn get_unchecked(&mut self, idx: usize, is_last: bool) -> Self::ElementRef<'_>;
+
+        /// Unsafely cast this data to the equivalent slice or collection of
+        /// unaligned `Vector`s
+        ///
+        /// # Safety
+        ///
+        /// The underlying scalar data must have a number of elements that is
+        /// a multiple of `V::LANES`.
+        unsafe fn as_unaligned_unchecked(self) -> Self::Unaligned;
+
+        /// Unsafely cast this data to the equivalent slice or collection of Vector.
+        ///
+        /// # Safety
+        ///
+        /// The underlying scalar data must be aligned like V and have a number
+        /// of elements that is a multiple of `V::LANES`.
+        unsafe fn as_aligned_unchecked(self) -> Self::Aligned;
     }
 
     /// Read access to aligned SIMD data
@@ -194,65 +220,57 @@ pub mod experimental {
     //
     // Base pointer of an `&[Vector]` slice, tagged with lifetime information
     #[derive(Copy, Clone)]
-    pub struct AlignedVectors<'target, T>(*const T, PhantomData<&'target [T]>);
+    pub struct AlignedVectors<'target, V: VectorInfo>(NonNull<V>, PhantomData<&'target [V]>);
     //
-    impl<T> AlignedVectors<'_, T> {
-        /// Tag a base pointer with lifetime information
-        ///
-        /// # Safety
-        ///
-        /// The pointer's target must be valid for this lifetime
-        #[inline(always)]
-        unsafe fn new(inner: *const T) -> Self {
-            Self(inner, PhantomData)
+    impl<'target, V: VectorInfo> From<&'target [V]> for AlignedVectors<'target, V> {
+        fn from(data: &'target [V]) -> Self {
+            Self(NonNull::from(data).cast::<V>(), PhantomData)
         }
     }
     //
     unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedVectors<'target, V> {
-        type Aligned = Self;
-        type ElementRef<'result> = V where Self: 'result;
         type Element = V;
+        type ElementRef<'result> = V where Self: 'result;
+        type Unaligned = Self;
+        type Aligned = Self;
     }
     //
     unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedVectors<'target, V> {
         #[inline(always)]
-        fn is_aligned(&self) -> bool {
-            true
+        unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
+            unsafe { *self.0.as_ptr().add(idx) }
         }
 
-        #[inline(always)]
-        unsafe fn as_aligned_unchecked(self) -> Self {
+        unsafe fn as_unaligned_unchecked(self) -> Self {
             self
         }
 
-        #[inline(always)]
-        unsafe fn get_unchecked(&mut self, idx: usize, _padding: MaybeUninit<V::Scalar>) -> V {
-            unsafe { *self.0.add(idx) }
+        unsafe fn as_aligned_unchecked(self) -> Self {
+            self
         }
     }
 
     // Owned arrays of Vector must be stored as-is in the Vectors collection,
     // but otherwise behave like &[Vector]
     unsafe impl<V: VectorInfo, const SIZE: usize> Vectorized<V> for [V; SIZE] {
-        type Aligned = Self;
-        type ElementRef<'result> = V;
         type Element = V;
+        type ElementRef<'result> = V;
+        type Unaligned = Self;
+        type Aligned = Self;
     }
     //
     unsafe impl<V: VectorInfo, const SIZE: usize> VectorizedImpl<V> for [V; SIZE] {
         #[inline(always)]
-        fn is_aligned(&self) -> bool {
-            true
+        unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
+            unsafe { *<[V]>::get_unchecked(&self[..], idx) }
         }
 
-        #[inline(always)]
-        unsafe fn as_aligned_unchecked(self) -> Self {
+        unsafe fn as_unaligned_unchecked(self) -> Self {
             self
         }
 
-        #[inline(always)]
-        unsafe fn get_unchecked(&mut self, idx: usize, _padding: MaybeUninit<V::Scalar>) -> V {
-            unsafe { *<[V]>::get_unchecked(&self[..], idx) }
+        unsafe fn as_aligned_unchecked(self) -> Self {
+            self
         }
     }
 
@@ -261,40 +279,168 @@ pub mod experimental {
     // --- Internal docs start here ---
     //
     // Base pointer of an `&mut [Vector]` slice, tagged with lifetime information
-    pub struct AlignedVectorsMut<'target, T>(*mut T, PhantomData<&'target mut [T]>);
+    pub struct AlignedVectorsMut<'target, V: VectorInfo>(NonNull<V>, PhantomData<&'target mut [V]>);
     //
-    impl<T> AlignedVectorsMut<'_, T> {
-        /// Tag a base pointer with lifetime information
-        ///
-        /// # Safety
-        ///
-        /// The pointer's target must be valid for this lifetime
-        #[inline(always)]
-        unsafe fn new(inner: *mut T) -> Self {
-            Self(inner, PhantomData)
+    impl<'target, V: VectorInfo> From<&'target mut [V]> for AlignedVectorsMut<'target, V> {
+        fn from(data: &'target mut [V]) -> Self {
+            Self(NonNull::from(data).cast::<V>(), PhantomData)
         }
     }
     //
     unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedVectorsMut<'target, V> {
-        type Aligned = Self;
-        type ElementRef<'result> = &'result mut V where Self: 'result;
         type Element = &'target mut V;
+        type ElementRef<'result> = &'result mut V where Self: 'result;
+        type Unaligned = Self;
+        type Aligned = Self;
     }
     //
     unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedVectorsMut<'target, V> {
         #[inline(always)]
-        fn is_aligned(&self) -> bool {
-            true
+        unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> &mut V {
+            unsafe { &mut *self.0.as_ptr().add(idx) }
         }
 
-        #[inline(always)]
-        unsafe fn as_aligned_unchecked(self) -> Self {
+        unsafe fn as_unaligned_unchecked(self) -> Self {
             self
         }
 
+        unsafe fn as_aligned_unchecked(self) -> Self {
+            self
+        }
+    }
+
+    /// Read access to unaligned SIMD data
+    //
+    // --- Internal docs start here ---
+    //
+    // Base pointer of an unaligned `&[Vector]` slice, tagged with lifetime
+    // information. Built out of a `&[Scalar]` slice. Usable length is the
+    // number of complete SIMD vectors within the underlying scalar slice.
+    #[derive(Copy, Clone)]
+    pub struct UnalignedVectors<'target, V: VectorInfo>(NonNull<V>, PhantomData<&'target [V]>);
+    //
+    impl<'target, V: VectorInfo> From<&'target [V::Scalar]> for UnalignedVectors<'target, V> {
+        fn from(data: &'target [V::Scalar]) -> Self {
+            Self(NonNull::from(data).cast::<V>(), PhantomData)
+        }
+    }
+    //
+    impl<'target, V: VectorInfo> UnalignedVectors<'target, V> {
+        /// Base pointer used by get_unchecked(idx)
+        ///
+        /// # Safety
+        ///
+        /// `idx` must be in range for the surrounding slice
         #[inline(always)]
-        unsafe fn get_unchecked(&mut self, idx: usize, _padding: MaybeUninit<V::Scalar>) -> &mut V {
-            unsafe { &mut *self.0.add(idx) }
+        unsafe fn get_ptr(&self, idx: usize) -> NonNull<V> {
+            unsafe { NonNull::new_unchecked(self.0.as_ptr().add(idx)) }
+        }
+    }
+    //
+    unsafe impl<'target, V: VectorInfo> Vectorized<V> for UnalignedVectors<'target, V> {
+        type Element = V;
+        type ElementRef<'result> = V where Self: 'result;
+        type Unaligned = Self;
+        type Aligned = AlignedVectors<'target, V>;
+    }
+    //
+    unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedVectors<'target, V> {
+        #[inline(always)]
+        unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
+            unsafe { self.get_ptr(idx).as_ptr().read_unaligned() }
+        }
+
+        unsafe fn as_unaligned_unchecked(self) -> Self {
+            self
+        }
+
+        unsafe fn as_aligned_unchecked(self) -> AlignedVectors<'target, V> {
+            V::assert_overaligned_array();
+            debug_assert_eq!(
+                self.0.as_ptr() as usize % core::mem::align_of::<V>(),
+                0,
+                "Asked to treat an unaligned pointer as aligned, which is Undefined Behavior"
+            );
+            AlignedVectors(self.0, PhantomData)
+        }
+    }
+
+    /// Write access to unaligned SIMD data
+    //
+    // --- Internal docs start here ---
+    //
+    // Base pointer of an unaligned `&mut [Vector]` slice, tagged with lifetime
+    // information. Built out of a `&mut [Scalar]` slice. Usable length is
+    // the number of complete SIMD vectors within the underlying scalar slice.
+    pub struct UnalignedVectorsMut<'target, V: VectorInfo>(
+        UnalignedVectors<'target, V>,
+        PhantomData<&'target mut [V]>,
+    );
+    //
+    impl<'target, V: VectorInfo> From<&'target mut [V::Scalar]> for UnalignedVectorsMut<'target, V> {
+        fn from(data: &'target mut [V::Scalar]) -> Self {
+            Self((&data[..]).into(), PhantomData)
+        }
+    }
+    //
+    unsafe impl<'target, V: VectorInfo> Vectorized<V> for UnalignedVectorsMut<'target, V> {
+        type Element = Self::ElementRef<'target>;
+        type ElementRef<'result> = UnalignedMut<'result, V> where Self: 'result;
+        type Unaligned = Self;
+        type Aligned = AlignedVectorsMut<'target, V>;
+    }
+    //
+    unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedVectorsMut<'target, V> {
+        #[inline(always)]
+        unsafe fn get_unchecked(&mut self, idx: usize, is_last: bool) -> UnalignedMut<'_, V> {
+            UnalignedMut {
+                vector: self.0.get_unchecked(idx, is_last),
+                target: self.0.get_ptr(idx),
+                lifetime: PhantomData,
+            }
+        }
+
+        unsafe fn as_unaligned_unchecked(self) -> Self {
+            self
+        }
+
+        unsafe fn as_aligned_unchecked(self) -> AlignedVectorsMut<'target, V> {
+            AlignedVectorsMut(self.0.as_aligned_unchecked().0, PhantomData)
+        }
+    }
+
+    /// Vector mutation proxy for unaligned SIMD data
+    ///
+    /// For mutation from &mut [Scalar], even if the number of elements is a
+    /// multiple of the number of vector lanes, we can't provide an &mut Vector
+    /// as it could be misaligned. So we provide a proxy object that acts as
+    /// closely to &mut Vector as possible.
+    pub struct UnalignedMut<'target, V: VectorInfo> {
+        vector: V,
+        target: NonNull<V>,
+        lifetime: PhantomData<&'target mut V>,
+    }
+    //
+    impl<V: VectorInfo> Deref for UnalignedMut<'_, V> {
+        type Target = V;
+
+        #[inline(always)]
+        fn deref(&self) -> &V {
+            &self.vector
+        }
+    }
+    //
+    impl<V: VectorInfo> DerefMut for UnalignedMut<'_, V> {
+        #[inline(always)]
+        fn deref_mut(&mut self) -> &mut V {
+            &mut self.vector
+        }
+    }
+    //
+    impl<V: VectorInfo> Drop for UnalignedMut<'_, V> {
+        #[inline(always)]
+        fn drop(&mut self) {
+            unsafe { self.target.as_ptr().write_unaligned(self.vector) }
         }
     }
 
@@ -302,149 +448,161 @@ pub mod experimental {
     //
     // --- Internal docs start here ---
     //
-    // Start and end pointers of an `&[Scalar]` slice, tagged with lifetime
-    // information (FIXME: Adjust this during padding reform).
+    // Unaligned &[Vector] with a vector that will be emitted in place of
+    // (possibly out-of-bounds) slice data when the last element is requested.
     #[derive(Copy, Clone)]
     pub struct PaddedScalars<'target, V: VectorInfo> {
-        start: *const V::Scalar,
-        end: *const V::Scalar,
-        _vector: PhantomData<&'target [V]>,
+        vectors: UnalignedVectors<'target, V>,
+        last_vector: MaybeUninit<V>,
     }
     //
-    impl<V: VectorInfo> PaddedScalars<'_, V> {
-        /// Build from scalar slice raw parts
+    impl<'target, V: VectorInfo> PaddedScalars<'target, V> {
+        /// Build from a scalar slice and padding data
+        ///
+        /// In addition to Self, the number of elements in the last vector that
+        /// actually originated from the scalar slice is also returned.
+        ///
+        /// # Errors
+        ///
+        /// - `NeedsPadding` if padding was needed but not provided
+        fn new(
+            data: &'target [V::Scalar],
+            padding: Option<V::Scalar>,
+        ) -> Result<(Self, usize), VectorizeError> {
+            // Start by treating most of the slice as unaligned SIMD data
+            let mut vectors = UnalignedVectors::from(data);
+
+            // Decide what the last vector of the simulated slice will be
+            let tail_len = data.len() % V::LANES;
+            let (last_vector, last_elems) = if tail_len == 0 {
+                // If this slice does not actually need padding, last_vector is
+                // just the last vector of slice elements, if any
+                if data.is_empty() {
+                    (MaybeUninit::uninit(), 0)
+                } else {
+                    (
+                        MaybeUninit::new(unsafe {
+                            vectors.get_unchecked(data.len() / V::LANES - 1, true)
+                        }),
+                        V::LANES,
+                    )
+                }
+            } else {
+                // Otherwise, last_vector is the last partial vector of slice
+                // elements, completed with supplied padding data
+                let Some(padding) = padding else { return Err(VectorizeError::NeedsPadding) };
+                let last_start = data.len() - tail_len;
+                let last_vector =
+                    V::from_fn(|idx| data.get(last_start + idx).copied().unwrap_or(padding));
+                (MaybeUninit::new(last_vector), tail_len)
+            };
+            Ok((
+                Self {
+                    vectors,
+                    last_vector,
+                },
+                last_elems,
+            ))
+        }
+
+        /// Base pointer used by get_unchecked(idx)
         ///
         /// # Safety
         ///
-        /// - `data` must be valid for the lifetime of this tagged pointer.
-        /// - `len` must not go past the end of `data`'s allocation.
+        /// `idx` must be in range for the surrounding slice
         #[inline(always)]
-        unsafe fn new(data: *const V::Scalar, len: usize) -> Self {
-            Self {
-                start: data,
-                end: unsafe { data.add(len) },
-                _vector: PhantomData,
-            }
-        }
-
-        /// Implementation of get_unchecked that gives back the base pointer
-        #[inline(always)]
-        unsafe fn get_unchecked_impl(
-            &mut self,
-            idx: usize,
-            padding: MaybeUninit<V::Scalar>,
-        ) -> (V, *const V::Scalar) {
-            let base_ptr = self.start.add(idx * V::LANES);
-            let value = V::from_fn(|offset| {
-                let scalar_ptr = base_ptr.wrapping_add(offset);
-                if scalar_ptr < self.end {
-                    unsafe { *scalar_ptr }
-                } else {
-                    unsafe { padding.assume_init() }
-                }
-            });
-            (value, base_ptr)
+        unsafe fn get_ptr(&self, idx: usize) -> NonNull<V> {
+            unsafe { self.vectors.get_ptr(idx) }
         }
     }
     //
     unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedScalars<'target, V> {
-        type Aligned = AlignedVectors<'target, V>;
-        type ElementRef<'result> = V where Self: 'result;
         type Element = V;
+        type ElementRef<'result> = V where Self: 'result;
+        type Unaligned = UnalignedVectors<'target, V>;
+        type Aligned = AlignedVectors<'target, V>;
     }
     //
     unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedScalars<'target, V> {
         #[inline(always)]
-        fn is_aligned(&self) -> bool {
-            let is_aligned = |ptr: *const V::Scalar| ptr as usize % core::mem::align_of::<V>() == 0;
-            // TODO: Move this to as_unaligned later on
-            assert_eq!(
-                core::mem::size_of::<V>(),
-                core::mem::size_of::<V::Array>(),
-                "Should always be true and will be elided at compile time, but \
-                not actually guaranteed for non-repr(transparent) types"
-            );
-            is_aligned(self.start) && is_aligned(self.end)
+        unsafe fn get_unchecked(&mut self, idx: usize, is_last: bool) -> V {
+            if is_last {
+                unsafe { self.last_vector.assume_init() }
+            } else {
+                unsafe { self.vectors.get_unchecked(idx, false) }
+            }
         }
 
-        #[inline(always)]
-        unsafe fn as_aligned_unchecked(self) -> Self::Aligned {
-            unsafe { AlignedVectors::new(self.start.cast()) }
+        unsafe fn as_unaligned_unchecked(self) -> UnalignedVectors<'target, V> {
+            self.vectors
         }
 
-        #[inline(always)]
-        unsafe fn get_unchecked(
-            &mut self,
-            idx: usize,
-            padding: MaybeUninit<V::Scalar>,
-        ) -> Self::ElementRef<'_> {
-            self.get_unchecked_impl(idx, padding).0
+        unsafe fn as_aligned_unchecked(self) -> AlignedVectors<'target, V> {
+            unsafe { self.vectors.as_aligned_unchecked() }
         }
     }
 
     // NOTE: Can't implement support for [Scalar; SIZE] yet due to const
-    //       generics limitations around AsVectorsResult (AsVectors should be
+    //       generics limitations (Vectorized::Aligned should be
     //       [Vector; { SIZE / Vector::LANES }], but array lengths derived from
-    //       generic parameters are not allowed yet.
+    //       generic parameters are not allowed yet).
 
     /// Write access to padded scalar data
     //
     // --- Internal docs start here ---
     //
-    // Start and end pointers of an `&mut [Scalar]` slice, tagged with lifetime
-    // information (FIXME: Adjust this during padding reform).
+    // Unaligned &[Vector] with a vector that will be emitted in place of
+    // (possibly out-of-bounds) slice data when the last element is requested.
     pub struct PaddedScalarsMut<'target, V: VectorInfo> {
         inner: PaddedScalars<'target, V>,
-        _vector: PhantomData<&'target mut [V]>,
+        num_last_elems: usize,
+        lifetime: PhantomData<&'target mut [V]>,
     }
     //
-    impl<V: VectorInfo> PaddedScalarsMut<'_, V> {
-        /// Build from scalar slice raw parts
+    impl<'target, V: VectorInfo> PaddedScalarsMut<'target, V> {
+        /// Build from a scalar slice and padding data
         ///
-        /// # Safety
+        /// # Errors
         ///
-        /// - `data` must be valid for the lifetime of this tagged pointer.
-        /// - `data.add(len)` must not go past the end of `data`'s allocation.
-        #[inline(always)]
-        unsafe fn new(data: *mut V::Scalar, len: usize) -> Self {
-            Self {
-                inner: PaddedScalars::new(data, len),
-                _vector: PhantomData,
-            }
+        /// - `NeedsPadding` if padding was needed but not provided
+        fn new(
+            data: &'target mut [V::Scalar],
+            padding: Option<V::Scalar>,
+        ) -> Result<Self, VectorizeError> {
+            let (inner, num_last_elems) = PaddedScalars::new(data, padding)?;
+            Ok(Self {
+                inner,
+                num_last_elems,
+                lifetime: PhantomData,
+            })
         }
     }
     //
     unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedScalarsMut<'target, V> {
+        type Element = PaddedMut<'target, V>;
+        type ElementRef<'result> = PaddedMut<'result, V> where Self: 'result;
+        type Unaligned = UnalignedVectorsMut<'target, V>;
         type Aligned = AlignedVectorsMut<'target, V>;
-        type ElementRef<'result> = PaddedVectorMut<'result, V> where Self: 'result;
-        type Element = PaddedVectorMut<'target, V>;
     }
     //
     unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedScalarsMut<'target, V> {
         #[inline(always)]
-        fn is_aligned(&self) -> bool {
-            self.inner.is_aligned()
-        }
-
-        #[inline(always)]
-        unsafe fn as_aligned_unchecked(self) -> Self::Aligned {
-            unsafe { AlignedVectorsMut::new(self.inner.start.cast_mut().cast()) }
-        }
-
-        #[inline(always)]
-        unsafe fn get_unchecked(
-            &mut self,
-            idx: usize,
-            padding: MaybeUninit<V::Scalar>,
-        ) -> Self::ElementRef<'_> {
-            let (vector, base_ptr) = self.inner.get_unchecked_impl(idx, padding);
-            let base_ptr = base_ptr.cast_mut();
-            PaddedVectorMut {
-                vector,
-                target: core::slice::from_raw_parts_mut(base_ptr, unsafe {
-                    self.inner.end.offset_from(base_ptr)
-                } as usize),
+        unsafe fn get_unchecked(&mut self, idx: usize, is_last: bool) -> PaddedMut<V> {
+            PaddedMut {
+                vector: self.inner.get_unchecked(idx, is_last),
+                target: core::slice::from_raw_parts_mut(
+                    self.inner.get_ptr(idx).cast::<V::Scalar>().as_ptr(),
+                    self.num_last_elems,
+                ),
             }
+        }
+
+        unsafe fn as_unaligned_unchecked(self) -> UnalignedVectorsMut<'target, V> {
+            unsafe { UnalignedVectorsMut(self.inner.as_unaligned_unchecked(), PhantomData) }
+        }
+
+        unsafe fn as_aligned_unchecked(self) -> AlignedVectorsMut<'target, V> {
+            unsafe { AlignedVectorsMut(self.inner.as_aligned_unchecked().0, PhantomData) }
         }
     }
 
@@ -453,12 +611,12 @@ pub mod experimental {
     /// For mutation from &mut [Scalar], we can't provide an &mut Vector as it
     /// could be misaligned and out of bounds. So we provide a proxy object
     /// that acts as closely to &mut Vector as possible.
-    pub struct PaddedVectorMut<'target, V: VectorInfo> {
+    pub struct PaddedMut<'target, V: VectorInfo> {
         vector: V,
         target: &'target mut [V::Scalar],
     }
     //
-    impl<V: VectorInfo> Deref for PaddedVectorMut<'_, V> {
+    impl<V: VectorInfo> Deref for PaddedMut<'_, V> {
         type Target = V;
 
         fn deref(&self) -> &V {
@@ -466,13 +624,13 @@ pub mod experimental {
         }
     }
     //
-    impl<V: VectorInfo> DerefMut for PaddedVectorMut<'_, V> {
+    impl<V: VectorInfo> DerefMut for PaddedMut<'_, V> {
         fn deref_mut(&mut self) -> &mut V {
             &mut self.vector
         }
     }
     //
-    impl<V: VectorInfo> Drop for PaddedVectorMut<'_, V> {
+    impl<V: VectorInfo> Drop for PaddedMut<'_, V> {
         fn drop(&mut self) {
             self.target
                 .copy_from_slice(&self.vector.as_ref()[..self.target.len()]);
@@ -489,9 +647,10 @@ pub mod experimental {
                 V: VectorInfo
                 $(, $t: Vectorized<V> + 'target)*
             > Vectorized<V> for ($($t,)*) {
-                type Aligned = ($($t::Aligned,)*);
-                type ElementRef<'result> = ($($t::ElementRef<'result>,)*) where Self: 'result;
                 type Element = ($($t::Element,)*);
+                type ElementRef<'result> = ($($t::ElementRef<'result>,)*) where Self: 'result;
+                type Unaligned = ($($t::Unaligned,)*);
+                type Aligned = ($($t::Aligned,)*);
             }
 
             #[allow(non_snake_case)]
@@ -501,30 +660,23 @@ pub mod experimental {
                 $(, $t: VectorizedImpl<V> + 'target)*
             > VectorizedImpl<V> for ($($t,)*) {
                 #[inline(always)]
-                fn is_aligned(&self) -> bool {
-                    let ($($t,)*) = self;
-                    $(
-                        if !$t.is_aligned() {
-                            return false;
-                        }
-                    )*
-                    true
-                }
-
-                #[inline(always)]
-                unsafe fn as_aligned_unchecked(self) -> Self::Aligned {
-                    let ($($t,)*) = self;
-                    unsafe { ($($t.as_aligned_unchecked(),)*) }
-                }
-
-                #[inline(always)]
                 unsafe fn get_unchecked(
                     &mut self,
                     idx: usize,
-                    padding: MaybeUninit<V::Scalar>
+                    is_last: bool
                 ) -> Self::ElementRef<'_> {
                     let ($($t,)*) = self;
-                    unsafe { ($($t.get_unchecked(idx, padding),)*)  }
+                    unsafe { ($($t.get_unchecked(idx, is_last),)*)  }
+                }
+
+                unsafe fn as_unaligned_unchecked(self) -> Self::Unaligned {
+                    let ($($t,)*) = self;
+                    unsafe { ($($t.as_unaligned_unchecked(),)*) }
+                }
+
+                unsafe fn as_aligned_unchecked(self) -> Self::Aligned {
+                    let ($($t,)*) = self;
+                    unsafe { ($($t.as_aligned_unchecked(),)*) }
                 }
             }
         };
@@ -550,8 +702,7 @@ pub mod experimental {
     pub struct Vectors<V: VectorInfo, Data: Vectorized<V> + VectorizedImpl<V>> {
         data: Data,
         len: usize,
-        last: usize,
-        padding: MaybeUninit<V::Scalar>,
+        vectors: PhantomData<V>,
     }
     //
     impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
@@ -559,33 +710,27 @@ pub mod experimental {
         ///
         /// # Safety
         ///
-        /// - It must be safe to dereference `data` for any index in 0..len
-        /// - If any of the inner pointers require padding, then padding must
-        ///   be initialized to a valid padding value.
-        #[inline(always)]
-        unsafe fn new(data: Data, len: usize, padding: MaybeUninit<V::Scalar>) -> Self {
+        /// - It must be safe to call `data.get_unchecked(idx)` for any index in
+        ///   range 0..len
+        unsafe fn from_raw_parts(data: Data, len: usize) -> Self {
             Self {
                 data,
                 len,
-                last: len - 1,
-                padding,
+                vectors: PhantomData,
             }
         }
 
         /// Returns the number of elements in the container
-        #[inline(always)]
         pub const fn len(&self) -> usize {
             self.len
         }
 
         /// Returns `true` if there are no elements in the container
-        #[inline(always)]
         pub const fn is_empty(&self) -> bool {
             self.len == 0
         }
 
         /// Returns the first element, or None if the container is empty
-        #[inline(always)]
         pub fn first(&mut self) -> Option<Data::ElementRef<'_>> {
             self.get(0)
         }
@@ -593,9 +738,8 @@ pub mod experimental {
         // TODO: split_(first|last)
 
         /// Returns the last element, or None if the container is empty
-        #[inline(always)]
         pub fn last(&mut self) -> Option<Data::ElementRef<'_>> {
-            self.get(self.last)
+            self.get(self.len - 1)
         }
 
         /// Returns the N-th element of the container
@@ -620,11 +764,10 @@ pub mod experimental {
         //       that's not yet in stable Rust.
         #[inline(always)]
         pub unsafe fn get_unchecked(&mut self, idx: usize) -> Data::ElementRef<'_> {
-            unsafe { self.data.get_unchecked(idx, self.padding) }
+            unsafe { self.data.get_unchecked(idx, idx == self.len - 1) }
         }
 
         /// Returns an iterator over contained elements
-        #[inline(always)]
         pub fn iter(&mut self) -> VectorsIter<V, Data> {
             <&mut Self>::into_iter(self)
         }
@@ -635,16 +778,13 @@ pub mod experimental {
         /// beginning of the container
         // TODO: Make a dedicated Iterator so I can implement DoubleEnded + ExactSize + Fused
         //       and add a remainder
-        #[inline(always)]
         pub fn array_chunks<const N: usize>(
             &mut self,
         ) -> impl Iterator<Item = [Data::ElementRef<'_>; N]> {
             let mut iter = self.iter();
             core::iter::from_fn(move || {
                 if iter.len() >= N {
-                    // FIXME: Can't use array::from_fn in perf-sensitive code as
-                    //        it may not be inlined...
-                    Some(core::array::from_fn(|_| iter.next().unwrap()))
+                    Some(array_from_fn(|_| iter.next().unwrap()))
                 } else {
                     None
                 }
@@ -667,7 +807,6 @@ pub mod experimental {
                 type Item = Data::$elem $(<$lifetime>)?;
                 type IntoIter = $name<$($lifetime,)? V, Data>;
 
-                #[inline(always)]
                 fn into_iter(self) -> Self::IntoIter {
                     let end = self.len;
                     Self::IntoIter {
@@ -716,22 +855,18 @@ pub mod experimental {
                     }
                 }
 
-                #[inline(always)]
                 fn size_hint(&self) -> (usize, Option<usize>) {
                     (self.len(), Some(self.len()))
                 }
 
-                #[inline(always)]
                 fn count(self) -> usize {
                     self.len()
                 }
 
-                #[inline(always)]
                 fn last(mut self) -> Option<Self::Item> {
                     self.next_back()
                 }
 
-                #[inline(always)]
                 fn nth(&mut self, n: usize) -> Option<Self::Item> {
                     if self.start.checked_add(n)? < self.end {
                         self.start += n - 1;
@@ -755,7 +890,6 @@ pub mod experimental {
                     }
                 }
 
-                #[inline(always)]
                 fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
                     if self.start < self.end.checked_sub(n)? {
                         self.end -= n - 1;
@@ -851,7 +985,7 @@ pub mod experimental {
 
         // Required methods
 
-        /// Internal method preparing for the `vectorize()` methods
+        /// Implementation of the `vectorize()` methods
         //
         // --- Internal docs starts here ---
         //
@@ -860,11 +994,16 @@ pub mod experimental {
         // - A pointer-like entity for treating the data as a slice of Vector
         //   (see VectorizedImpl for more information)
         // - The number of Vector elements that the emulated slice contains
-        // - The truth that this data needs padding
         //
-        // This panics if called on a tuple of slices/containers who would not
-        // produce the same amount of Vector elements.
-        fn into_vectorized_parts(self) -> (Self::Vectorized, usize, bool);
+        // # Errors
+        //
+        // - NeedsPadding if padding was needed, but not provided
+        // - InhomogeneousLength if input is (or contains) a tuple and not all
+        //   tuple elements yield the same amount of SIMD vectors
+        fn into_vectorized_parts(
+            self,
+            padding: Option<V::Scalar>,
+        ) -> Result<(Self::Vectorized, usize), VectorizeError>;
 
         // Provided methods
 
@@ -877,14 +1016,9 @@ pub mod experimental {
         ///   number of SIMD vector lanes (you need `vectorize_pad()`)
         /// - If called on a tuple and not all tuple elements yield the same
         ///   amount of SIMD elements.
-        #[inline(always)]
-        fn vectorize(self) -> Vectors<V, Self::Vectorized> {
-            let (base, len, needs_padding) = self.into_vectorized_parts();
-            assert!(
-                !needs_padding,
-                "Scalar data requires padding, but padding was not provided"
-            );
-            unsafe { Vectors::new(base, len, MaybeUninit::uninit()) }
+        fn vectorize(self) -> Vectors<V, <Self::Vectorized as Vectorized<V>>::Unaligned> {
+            let (base, len) = self.into_vectorized_parts(None).unwrap();
+            unsafe { Vectors::from_raw_parts(base.as_unaligned_unchecked(), len) }
         }
 
         /// Create a SIMD view of this data, providing some padding
@@ -905,10 +1039,9 @@ pub mod experimental {
         ///
         /// - If called on a tuple and not all tuple elements yield the same
         ///   amount of SIMD elements.
-        #[inline(always)]
         fn vectorize_pad(self, padding: V::Scalar) -> Vectors<V, Self::Vectorized> {
-            let (base, len, _needs_padding) = self.into_vectorized_parts();
-            unsafe { Vectors::new(base, len, MaybeUninit::new(padding)) }
+            let (base, len) = self.into_vectorized_parts(Some(padding)).unwrap();
+            unsafe { Vectors::from_raw_parts(base, len) }
         }
 
         /// Create a SIMD view of this data, assert it is (or can be moved to) a
@@ -937,15 +1070,21 @@ pub mod experimental {
         /// - If the data is not in a SIMD-optimized layout.
         /// - If called on a tuple and not all tuple elements yield the same
         ///   amount of SIMD elements.
-        #[inline(always)]
         fn vectorized_aligned(self) -> Vectors<V, <Self::Vectorized as Vectorized<V>>::Aligned> {
-            let (base, len, needs_padding) = self.into_vectorized_parts();
-            let base = base
-                .as_aligned()
-                .expect("Data is not in a SIMD-friendly layout");
-            debug_assert!(!needs_padding, "SIMD-friendly data should not need padding");
-            unsafe { Vectors::new(base, len, MaybeUninit::uninit()) }
+            let (base, len) = self.into_vectorized_parts(None).unwrap();
+            unsafe { Vectors::from_raw_parts(base.as_aligned_unchecked(), len) }
         }
+    }
+
+    /// Error returned by `Vectorizable::into_vectorized_parts`
+    #[doc(hidden)]
+    #[derive(Debug)]
+    pub enum VectorizeError {
+        /// Padding data was needed, but not provided
+        NeedsPadding,
+
+        /// Input contains tuples of data with inhomogeneous SIMD length
+        InhomogeneousLength,
     }
 
     // === Vectorize implementation is trivial for slices of vector data ===
@@ -955,13 +1094,11 @@ pub mod experimental {
     {
         type Vectorized = AlignedVectors<'target, Vector<A, B, S>>;
 
-        #[inline(always)]
-        fn into_vectorized_parts(self) -> (Self::Vectorized, usize, bool) {
-            (
-                unsafe { AlignedVectors::new(self.as_ptr()) },
-                self.len(),
-                false,
-            )
+        fn into_vectorized_parts(
+            self,
+            _padding: Option<B>,
+        ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+            Ok((self.into(), self.len()))
         }
     }
 
@@ -970,13 +1107,12 @@ pub mod experimental {
     {
         type Vectorized = AlignedVectorsMut<'target, Vector<A, B, S>>;
 
-        #[inline(always)]
-        fn into_vectorized_parts(self) -> (Self::Vectorized, usize, bool) {
-            (
-                unsafe { AlignedVectorsMut::new(self.as_mut_ptr()) },
-                self.len(),
-                false,
-            )
+        fn into_vectorized_parts(
+            self,
+            _padding: Option<B>,
+        ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+            let len = self.len();
+            Ok((self.into(), len))
         }
     }
 
@@ -985,9 +1121,11 @@ pub mod experimental {
     {
         type Vectorized = [Vector<A, B, S>; ARRAY_SIZE];
 
-        #[inline(always)]
-        fn into_vectorized_parts(self) -> (Self::Vectorized, usize, bool) {
-            (self, ARRAY_SIZE, false)
+        fn into_vectorized_parts(
+            self,
+            _padding: Option<B>,
+        ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+            Ok((self, ARRAY_SIZE))
         }
     }
 
@@ -996,9 +1134,11 @@ pub mod experimental {
     {
         type Vectorized = AlignedVectors<'target, Vector<A, B, S>>;
 
-        #[inline(always)]
-        fn into_vectorized_parts(self) -> (Self::Vectorized, usize, bool) {
-            self.as_slice().into_vectorized_parts()
+        fn into_vectorized_parts(
+            self,
+            padding: Option<B>,
+        ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+            self.as_slice().into_vectorized_parts(padding)
         }
     }
 
@@ -1007,9 +1147,11 @@ pub mod experimental {
     {
         type Vectorized = AlignedVectorsMut<'target, Vector<A, B, S>>;
 
-        #[inline(always)]
-        fn into_vectorized_parts(self) -> (Self::Vectorized, usize, bool) {
-            self.as_mut_slice().into_vectorized_parts()
+        fn into_vectorized_parts(
+            self,
+            padding: Option<B>,
+        ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+            self.as_mut_slice().into_vectorized_parts(padding)
         }
     }
 
@@ -1020,14 +1162,14 @@ pub mod experimental {
     {
         type Vectorized = PaddedScalars<'target, Vector<A, B, S>>;
 
-        #[inline(always)]
-        fn into_vectorized_parts(self) -> (Self::Vectorized, usize, bool) {
-            let needs_padding = self.len() % S != 0;
-            (
-                unsafe { PaddedScalars::new(self.as_ptr(), self.len()) },
-                self.len() / S + needs_padding as usize,
-                needs_padding,
-            )
+        fn into_vectorized_parts(
+            self,
+            padding: Option<B>,
+        ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+            Ok((
+                PaddedScalars::new(self, padding)?.0,
+                self.len() / S + (self.len() % S != 0) as usize,
+            ))
         }
     }
 
@@ -1036,14 +1178,12 @@ pub mod experimental {
     {
         type Vectorized = PaddedScalarsMut<'target, Vector<A, B, S>>;
 
-        #[inline(always)]
-        fn into_vectorized_parts(self) -> (Self::Vectorized, usize, bool) {
-            let needs_padding = self.len() % S != 0;
-            (
-                unsafe { PaddedScalarsMut::new(self.as_mut_ptr(), self.len()) },
-                self.len() / S + needs_padding as usize,
-                needs_padding,
-            )
+        fn into_vectorized_parts(
+            self,
+            padding: Option<B>,
+        ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+            let simd_len = self.len() / S + (self.len() % S != 0) as usize;
+            Ok((PaddedScalarsMut::new(self, padding)?, simd_len))
         }
     }
 
@@ -1055,9 +1195,11 @@ pub mod experimental {
     {
         type Vectorized = PaddedScalars<'target, Vector<A, B, S>>;
 
-        #[inline(always)]
-        fn into_vectorized_parts(self) -> (Self::Vectorized, usize, bool) {
-            self.as_slice().into_vectorized_parts()
+        fn into_vectorized_parts(
+            self,
+            padding: Option<B>,
+        ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+            self.as_slice().into_vectorized_parts(padding)
         }
     }
 
@@ -1066,9 +1208,11 @@ pub mod experimental {
     {
         type Vectorized = PaddedScalarsMut<'target, Vector<A, B, S>>;
 
-        #[inline(always)]
-        fn into_vectorized_parts(self) -> (Self::Vectorized, usize, bool) {
-            self.as_mut_slice().into_vectorized_parts()
+        fn into_vectorized_parts(
+            self,
+            padding: Option<B>,
+        ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+            self.as_mut_slice().into_vectorized_parts(padding)
         }
     }
 
@@ -1082,25 +1226,27 @@ pub mod experimental {
             unsafe impl<V: VectorInfo $(, $t: Vectorizable<V>)*> Vectorizable<V> for ($($t,)*) {
                 type Vectorized = ($($t::Vectorized,)*);
 
-                #[inline(always)]
                 fn into_vectorized_parts(
                     self,
-                ) -> (Self::Vectorized, usize, bool) {
+                    padding: Option<V::Scalar>,
+                ) -> Result<(Self::Vectorized, usize), VectorizeError> {
                     // Pattern-match the tuple to variables named after inner types
                     let ($($t,)*) = self;
 
                     // Reinterpret tuple fields as SIMD vectors
-                    let ($($t,)*) = ($($t.into_vectorized_parts(),)*);
+                    let ($($t,)*) = ($($t.into_vectorized_parts(padding)?,)*);
 
                     // Analyze tuple field lengths and need for padding
                     let mut len = None;
-                    let mut needs_padding = false;
                     $(
-                        let (_, t_len, t_needs_padding) = $t;
+                        let (_, t_len) = $t;
 
                         // All tuple fields should have the same SIMD length
                         #[allow(unused_assignments)]
                         if let Some(len) = len {
+                            if len != t_len {
+                                return Err(VectorizeError::InhomogeneousLength);
+                            }
                             assert_eq!(
                                 t_len, len,
                                 "Tuple elements do not produce the same amount of SIMD vectors"
@@ -1108,19 +1254,13 @@ pub mod experimental {
                         } else {
                             len = Some(t_len);
                         }
-
-                        // If at least one field needs padding, the tuple does
-                        if t_needs_padding {
-                            needs_padding = true;
-                        }
                     )*
 
                     // All good, return Vectors building blocks
-                    (
+                    Ok((
                         ($($t.0,)*),
                         len.expect("This should not be implemented for zero-sized tuples"),
-                        needs_padding
-                    )
+                    ))
                 }
             }
         };
