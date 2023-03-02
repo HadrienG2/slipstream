@@ -1000,7 +1000,7 @@ pub mod experimental {
         /// multiple accumulators.
         ///
         /// `neutral` produce the neutral element of the computation being
-        /// performed. All accumulators will be initialized to this value,
+        /// performed. All accumulators will be initialized using this function,
         /// and eventually merged using `merge`.
         ///
         fn fold_ilp<const STREAMS: usize, Acc>(
