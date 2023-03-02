@@ -259,7 +259,8 @@ pub mod types;
 pub mod vector;
 pub mod vectorize;
 
-pub use iterators::experimental::Vectorizable;
+use iterators::experimental::Vectorized;
+pub use iterators::experimental::{VectorInfo, Vectorizable, Vectors};
 pub use mask::Mask;
 pub use types::*;
 pub use vector::Vector;
@@ -405,8 +406,6 @@ mod inner {
     }
 }
 
-/* FIXME: Make these work
-
 /// Free-standing version of [`Vectorizable::vectorize`].
 ///
 /// This is the same as `a.vectorize()`. Nevertheless, this version might be more convenient as it
@@ -420,9 +419,10 @@ mod inner {
 /// }
 /// ```
 #[inline(always)]
-pub fn vectorize<V, A>(a: A) -> impl Iterator<Item = V>
+pub fn vectorize<V, A>(a: A) -> Vectors<V, <A::Vectorized as Vectorized<V>>::Unaligned>
 where
     A: Vectorizable<V>,
+    V: VectorInfo,
 {
     a.vectorize()
 }
@@ -434,16 +434,36 @@ where
 /// ```rust
 /// # use slipstream::prelude::*;
 /// let data = [1, 2, 3, 4, 5, 6];
-/// let v = slipstream::vectorize_pad(&data[..], i32x4::splat(-1)).collect::<Vec<_>>();
+/// let v = slipstream::vectorize_pad(&data[..], i32x4::splat(-1)).into_iter().collect::<Vec<_>>();
 /// assert_eq!(v, vec![i32x4::new([1, 2, 3, 4]), i32x4::new([5, 6, -1, -1])]);
 /// ```
 #[inline(always)]
-pub fn vectorize_pad<V, A>(a: A, pad: A::Padding) -> impl Iterator<Item = V>
+pub fn vectorize_pad<V, A>(a: A, pad: V::Scalar) -> Vectors<V, A::Vectorized>
 where
     A: Vectorizable<V>,
+    V: VectorInfo,
 {
     a.vectorize_pad(pad)
-} */
+}
+
+/// Free-standing version of [`Vectorizable::vectorize_aligned`].
+///
+/// Equivalent to `a.vectorize_aligned()`, but may be more convenient or readable in certain cases.
+///
+/// ```rust
+/// # use slipstream::prelude::*;
+/// let data = [i32x4::new([1, 2, 3, 4]), i32x4::new([5, 6, 7, 8])];
+/// let v = slipstream::vectorize_aligned(&data[..]).into_iter().collect::<Vec<_>>();
+/// assert_eq!(v, vec![i32x4::new([1, 2, 3, 4]), i32x4::new([5, 6, 7, 8])]);
+/// ```
+#[inline(always)]
+pub fn vectorize_aligned<V, A>(a: A) -> Vectors<V, <A::Vectorized as Vectorized<V>>::Aligned>
+where
+    A: Vectorizable<V>,
+    V: VectorInfo,
+{
+    a.vectorize_aligned()
+}
 
 #[cfg(test)]
 mod tests {
