@@ -113,8 +113,6 @@ pub mod experimental {
         /// Owned element of the output `Vectors` collection
         type Element: Sized;
 
-        // TODO: Add SliceIndex-like GAT infrastructure
-
         /// Reinterpretation of this data as SIMD data with optimal layout
         type Aligned: Vectorized<V> + VectorizedImpl<V>;
     }
