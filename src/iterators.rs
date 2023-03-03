@@ -36,10 +36,10 @@ use crate::Vector;
 pub mod experimental {
     use crate::{inner::Repr, vector::align::Align, Vector};
     use core::{
-        iter::{FusedIterator, Product, Skip, StepBy, Sum},
+        iter::FusedIterator,
         marker::PhantomData,
         mem::MaybeUninit,
-        ops::{Add, Deref, DerefMut, Mul},
+        ops::{Deref, DerefMut},
         ptr::NonNull,
     };
 
@@ -914,6 +914,12 @@ pub mod experimental {
                 for $name<$($lifetime,)? V, Data>
             {
             }
+            //
+            #[cfg(feature = "iterator_ilp")]
+            unsafe impl<$($lifetime,)? V: VectorInfo, Data: VectorizedImpl<V>> iterator_ilp::TrustedLen
+                for $name<$($lifetime,)? V, Data>
+            {
+            }
         }
     }
     impl_iterator!(
@@ -924,204 +930,6 @@ pub mod experimental {
         /// Owned iterator over Vectors' elements
         (VectorsIntoIter, Data::Element)
     );
-
-    /// Iterator extension that provides instruction-parallel reductions
-    ///
-    /// Instruction-Level Parallelism (ILP) is very important to CPU performance.
-    /// Modern superscalar CPU are built under the assumption that they can
-    /// split the incoming instruction stream into multiple independent
-    /// substreams and execute these substreams in parallel. But unfortunately,
-    /// standard Iterator reduction routines like `fold()` and `reduce()` are
-    /// not amenable to this mechanism when invoked on iterators of
-    /// floating-point data (among other types), because...
-    ///
-    /// - On one side, the Rust compiler honors a strict discipline of never
-    ///   reordering floating-point operations in user code.
-    ///   This is good because doing so can change results, and in the worst
-    ///   case introduce numerical instabilities that were not present before.
-    /// - On the other side, standard iterator reductions are specified to
-    ///   feed the reduction routine with elements one by one, in iteration
-    ///   order, which means that the reduction is one huge dependency chain
-    ///   with no opportunities for instruction-level parallelism (unless the
-    ///   user-specified reduction routine implements ILP manually, which is
-    ///   very tedious).
-    ///
-    /// This Iterator extension solves the problem by treating the iterator as
-    /// STREAMS interleaved independent streams, where STREAMS is a
-    /// user-provided compilation constant. The reduction function will be run
-    /// on each of these substreams, and only at the end the results of the
-    /// various substreams will be aggregated.
-    ///
-    /// A tradeoff of this approach is that many replicated Iterator methods
-    /// which exit early without consuming consume the Iterator further in their
-    /// original version, may consume a few extra iterator elements before
-    /// stopping in their ILP version, in order to ensure good code generation
-    /// (early exit is very bad for compiler optimizations).
-    ///
-    /// As a result, the early exit feature of the original methods had to be
-    /// dropped, and the ILP versions consume the iterator.
-    ///
-    /// The number of instruction streams STREAMS should be tuned by
-    /// benchmarking the reduction algorithm at hand. Increasing it provides
-    /// more opportunities for instruction-level parallelism, which will improve
-    /// performance of simple reduction functions up to the point where the
-    /// CPU's computational resources are fully saturated. At that point,
-    /// using more ILP streams brings no benefits anymore, and increasing it
-    /// too much will lead to a depletion of hardware resources (registers,
-    /// instruction cache...), at which point performance will drop.
-    trait IteratorILP: Iterator + Sized {
-        /// Like [`Iterator::any()`], but with multiple ILP streams and consumes the iterator
-        fn any_ilp<const STREAMS: usize>(self, predicate: impl FnMut(Self::Item) -> bool) -> bool {
-            any_like_ilp::<STREAMS, _>(self, predicate, true)
-        }
-
-        /// Like [`Iterator::all()`], but with multiple ILP streams and consumes the iterator
-        fn all_ilp<const STREAMS: usize>(self, predicate: impl FnMut(Self::Item) -> bool) -> bool {
-            any_like_ilp::<STREAMS, _>(self, predicate, false)
-        }
-
-        /// Like [`Iterator::find()`], but with multiple ILP streams and consumes the iterator
-        fn find_ilp<const STREAMS: usize>(
-            self,
-            predicate: impl FnMut(&Self::Item) -> bool,
-        ) -> Option<Self::Item>;
-
-        /// Like [`Iterator::find_map()`], but with multiple ILP streams and consumes the iterator
-        fn find_map_ilp<const STREAMS: usize, Res>(
-            self,
-            f: impl FnMut(Self::Item) -> Option<Res>,
-        ) -> Option<Res> {
-            self.map(f)
-                .find_ilp::<STREAMS>(|res| res.is_some())
-                .flatten()
-        }
-
-        /// Like [`Iterator::fold()`], but with multiple ILP streams and thus
-        /// multiple accumulators.
-        ///
-        /// `neutral` produce the neutral element of the computation being
-        /// performed. All accumulators will be initialized using this function,
-        /// and eventually merged using `merge`.
-        ///
-        fn fold_ilp<const STREAMS: usize, Acc>(
-            self,
-            neutral: impl FnMut() -> Acc,
-            accumulate: impl FnMut(Acc, Self::Item) -> Acc,
-            merge: impl FnMut(Acc, Acc) -> Acc,
-        ) -> Acc;
-
-        /// Like [`Iterator::reduce()`], but with multiple ILP streams
-        fn reduce_ilp<const STREAMS: usize>(
-            self,
-            reduce: impl FnMut(Self::Item, Self::Item) -> Self::Item,
-        ) -> Option<Self::Item> {
-            self.fold_ilp::<STREAMS, _>(
-                || None,
-                |acc_opt, item| {
-                    Some(if let Some(acc) = acc_opt {
-                        reduce(acc, item)
-                    } else {
-                        item
-                    })
-                },
-                |acc_opt_1, acc_opt_2| match (acc_opt_1, acc_opt_2) {
-                    (Some(a), Some(b)) => Some(reduce(a, b)),
-                    (Some(a), _) | (_, Some(a)) => Some(a),
-                    (None, None) => None,
-                },
-            )
-        }
-
-        /// Like [`Iterator::position()`], but with multiple ILP streams and consumes the iterator
-        fn position_ilp<const STREAMS: usize>(
-            self,
-            predicate: impl FnMut(Self::Item) -> bool,
-        ) -> Option<usize> {
-            position_like_ilp::<STREAMS, _>(self.enumerate(), predicate)
-        }
-
-        /// Like [`Iterator::rposition()`], but with multiple ILP streams and consumes the iterator
-        fn rposition_ilp<const STREAMS: usize>(
-            self,
-            predicate: impl FnMut(Self::Item) -> bool,
-        ) -> Option<usize>
-        where
-            Self: DoubleEndedIterator + ExactSizeIterator,
-        {
-            position_like_ilp::<STREAMS, _>(self.enumerate().rev(), predicate)
-        }
-
-        /// Like [`Iterator::sum()`], but with multiple ILP streams, requires
-        /// a clonable iterator, and needs S: Add<Output = S>
-        fn sum_ilp<const STREAMS: usize, S: Sum<Self::Item> + Add<Output = S>>(self) -> S
-        where
-            Self: Clone,
-        {
-            sum_like_ilp::<STREAMS, _, _>(self, |iter| iter.sum::<S>(), |a, b| a + b)
-        }
-
-        /// Like [`Iterator::product()`], but with multiple ILP streams,
-        /// requires a clonable iterator, and needs P: Mul<Output = P>
-        fn product_ilp<const STREAMS: usize, P: Product<Self::Item> + Mul<Output = P>>(
-            self,
-            merge: impl FnMut(P, P) -> P,
-        ) -> P
-        where
-            Self: Clone,
-        {
-            sum_like_ilp::<STREAMS, _, _>(self, |iter| iter.product::<P>(), |a, b| a * b)
-        }
-    }
-    //
-    impl<I: Iterator + Sized> IteratorILP for I {}
-    //
-    /// Implementation of any-like iterator reductions with ILP
-    fn any_like_ilp<const STREAMS: usize, Iter: Iterator>(
-        iter: Iter,
-        predicate: impl FnMut(Iter::Item) -> bool,
-        stop_value: bool,
-    ) -> bool {
-        iter.find_map_ilp::<STREAMS, _>(|item| {
-            (predicate(item) == stop_value).then_some(stop_value)
-        })
-        .unwrap_or(!stop_value)
-    }
-    //
-    /// Implementation of position-like iterator reduction with ILP
-    fn position_like_ilp<const STREAMS: usize, Item>(
-        enumerate: impl Iterator<Item = (usize, Item)>,
-        predicate: impl FnMut(Item) -> bool,
-    ) -> Option<usize> {
-        enumerate.find_map_ilp(|(idx, elem)| predicate(elem).then_some(idx))
-    }
-    //
-    /// Implementation of sum-like iterator reductions with ILP
-    fn sum_like_ilp<const STREAMS: usize, Iter: Iterator + Clone, Res>(
-        iter: Iter,
-        mut sum_like: impl FnMut(StepBy<Skip<Iter>>) -> Res,
-        mut merge: impl FnMut(Res, Res) -> Res,
-    ) -> Res {
-        let streams = array_from_fn(|offset| iter.clone().skip(offset).step_by(STREAMS));
-        reduce_ilp_accumulators(streams.map(sum_like), merge)
-    }
-    //
-    /// Generic ILP accumulator reduction
-    fn reduce_ilp_accumulators<const STREAMS: usize, Acc>(
-        accs: [Acc; STREAMS],
-        merge: impl FnMut(Acc, Acc) -> Acc,
-    ) -> Acc {
-        let mut accs = accs.map(|acc| Some(acc));
-        let mut stride = STREAMS / 2;
-        while stride > 0 {
-            for i in 0..stride.min(STREAMS - stride) {
-                accs[i] = Some(merge(
-                    accs[i].take().unwrap(),
-                    accs[i + stride].take().unwrap(),
-                ));
-            }
-        }
-        accs[0].take().unwrap()
-    }
 
     // === Step 3: Translate from scalar slices and containers to vector slices ===
 
