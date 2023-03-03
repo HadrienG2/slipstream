@@ -1,3 +1,4 @@
+use iterator_ilp::IteratorILP;
 use multiversion::{multiversion, target::target_cfg_f};
 use rand::random;
 use slipstream::prelude::*;
@@ -70,7 +71,7 @@ macro_rules! generate_simple_dot {
         #[multiversion(targets = "simd", dispatcher = $dispatcher)]
         fn $name(lhs: &Vector, rhs: &Vector) -> Scalar {
             // Set up a single SIMD accumulator
-            let mut accumulator = V::default();
+            let mut accumulator = V::splat(0.0);
 
             // Iterate over SIMD vectors and compute sum of products
             for (lvec, rvec) in (&lhs.0[..], &rhs.0[..]).vectorize() {
@@ -95,39 +96,23 @@ macro_rules! generate_parallel_dot {
         #[inline(never)]
         #[multiversion(targets = "simd", dispatcher = $dispatcher)]
         fn $name(lhs: &Vector, rhs: &Vector) -> Scalar {
-            // Set up one accumulator per instruction stream
-            let mut accumulators = [V::default(); CHUNK_VECS];
-
             // Work as in simple_dot, but with multiple SIMD accumulators
-            // operating over larger chunks of elements...
-            // FIXME: array_chunks does not codegen well in this case, need
-            //        actual dynamic chunks
-            for input_chunk in (&lhs.0[..], &rhs.0[..])
+            // (this uses the iterator_ilp crate to avoid manual loop unrolling)
+            (&lhs.0[..], &rhs.0[..])
                 .vectorize()
-                .array_chunks::<CHUNK_VECS>()
-            {
-                // ...then over SIMD vectors inside the elements
-                for (acc, &(lvec, rvec)) in accumulators.iter_mut().zip(input_chunk.iter()) {
-                    if target_cfg_f!(target_feature = "fma") {
-                        *acc = lvec.mul_add(rvec, *acc);
-                    } else {
-                        *acc += lvec * rvec;
-                    }
-                }
-            }
-
-            // Reduce SIMD accumulators with maximal parallelism
-            assert!(CHUNK_VECS.is_power_of_two());
-            let mut stride = CHUNK_VECS / 2;
-            while stride > 0 {
-                for i in 0..stride {
-                    accumulators[i] += accumulators[i + stride];
-                }
-                stride /= 2;
-            }
-
-            // Reduce the final SIMD accumulator
-            accumulators[0].horizontal_sum()
+                .into_iter()
+                .fold_ilp::<CHUNK_VECS, _>(
+                    || V::splat(0.0),
+                    |acc, (lvec, rvec)| {
+                        if target_cfg_f!(target_feature = "fma") {
+                            lvec.mul_add(rvec, acc)
+                        } else {
+                            acc + lvec * rvec
+                        }
+                    },
+                    |acc1, acc2| acc1 + acc2,
+                )
+                .horizontal_sum()
         }
     };
 }
