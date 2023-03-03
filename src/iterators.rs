@@ -915,7 +915,6 @@ pub mod experimental {
             {
             }
             //
-            #[cfg(feature = "iterator_ilp")]
             unsafe impl<$($lifetime,)? V: VectorInfo, Data: VectorizedImpl<V>> iterator_ilp::TrustedLen
                 for $name<$($lifetime,)? V, Data>
             {
