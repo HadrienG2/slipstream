@@ -70,20 +70,11 @@ macro_rules! generate_simple_dot {
         #[inline(never)]
         #[multiversion(targets = "simd", dispatcher = $dispatcher)]
         fn $name(lhs: &Vector, rhs: &Vector) -> Scalar {
-            // Set up a single SIMD accumulator
-            let mut accumulator = V::splat(0.0);
-
-            // Iterate over SIMD vectors and compute sum of products
-            for (lvec, rvec) in (&lhs.0[..], &rhs.0[..]).vectorize() {
-                if target_cfg_f!(target_feature = "fma") {
-                    accumulator = lvec.mul_add(rvec, accumulator);
-                } else {
-                    accumulator += lvec * rvec;
-                }
-            }
-
-            // Reduce SIMD vector of result
-            accumulator.horizontal_sum()
+            (&lhs.0[..], &rhs.0[..])
+                .vectorize()
+                .into_iter()
+                .fold(V::splat(0.0), |acc, (lvec, rvec)| acc + lvec * rvec)
+                .horizontal_sum()
         }
     };
 }
