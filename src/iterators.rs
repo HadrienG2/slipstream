@@ -71,7 +71,9 @@ pub mod experimental {
     /// Users of this trait may rely on the provided information to be correct
     /// for safety.
     //
-    pub unsafe trait VectorInfo: AsRef<[Self::Scalar]> + Copy + Sized + 'static {
+    pub unsafe trait VectorInfo:
+        AsRef<[Self::Scalar]> + Copy + From<Self::Array> + Into<Self::Array> + Sized + 'static
+    {
         /// Inner scalar type (commonly called B in generics)
         type Scalar: Copy + Sized + 'static;
 
@@ -317,11 +319,14 @@ pub mod experimental {
     // information. Built out of a `&[Scalar]` slice. Usable length is the
     // number of complete SIMD vectors within the underlying scalar slice.
     #[derive(Copy, Clone)]
-    pub struct UnalignedVectors<'target, V: VectorInfo>(NonNull<V>, PhantomData<&'target [V]>);
+    pub struct UnalignedVectors<'target, V: VectorInfo>(
+        NonNull<V::Array>,
+        PhantomData<&'target [V]>,
+    );
     //
     impl<'target, V: VectorInfo> From<&'target [V::Scalar]> for UnalignedVectors<'target, V> {
         fn from(data: &'target [V::Scalar]) -> Self {
-            Self(NonNull::from(data).cast::<V>(), PhantomData)
+            Self(NonNull::from(data).cast::<V::Array>(), PhantomData)
         }
     }
     //
@@ -332,7 +337,7 @@ pub mod experimental {
         ///
         /// `idx` must be in range for the surrounding slice
         #[inline(always)]
-        unsafe fn get_ptr(&self, idx: usize) -> NonNull<V> {
+        unsafe fn get_ptr(&self, idx: usize) -> NonNull<V::Array> {
             unsafe { NonNull::new_unchecked(self.0.as_ptr().add(idx)) }
         }
     }
@@ -347,7 +352,7 @@ pub mod experimental {
     unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedVectors<'target, V> {
         #[inline(always)]
         unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
-            unsafe { self.get_ptr(idx).as_ptr().read_unaligned() }
+            unsafe { self.get_ptr(idx).as_ptr().read() }.into()
         }
 
         unsafe fn as_unaligned_unchecked(self) -> Self {
@@ -361,7 +366,7 @@ pub mod experimental {
                 0,
                 "Asked to treat an unaligned pointer as aligned, which is Undefined Behavior"
             );
-            AlignedVectors(self.0, PhantomData)
+            AlignedVectors(self.0.cast::<V>(), PhantomData)
         }
     }
 
@@ -417,7 +422,7 @@ pub mod experimental {
     /// closely to &mut Vector as possible.
     pub struct UnalignedMut<'target, V: VectorInfo> {
         vector: V,
-        target: NonNull<V>,
+        target: NonNull<V::Array>,
         lifetime: PhantomData<&'target mut V>,
     }
     //
@@ -440,7 +445,7 @@ pub mod experimental {
     impl<V: VectorInfo> Drop for UnalignedMut<'_, V> {
         #[inline(always)]
         fn drop(&mut self) {
-            unsafe { self.target.as_ptr().write_unaligned(self.vector) }
+            unsafe { self.target.as_ptr().write(self.vector.into()) }
         }
     }
 
@@ -511,7 +516,7 @@ pub mod experimental {
         ///
         /// `idx` must be in range for the surrounding slice
         #[inline(always)]
-        unsafe fn get_ptr(&self, idx: usize) -> NonNull<V> {
+        unsafe fn get_ptr(&self, idx: usize) -> NonNull<V::Array> {
             unsafe { self.vectors.get_ptr(idx) }
         }
     }
