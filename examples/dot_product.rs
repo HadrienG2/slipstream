@@ -23,14 +23,9 @@ const SIZE: usize = 4096;
 // Most compute-oriented CPUs can process multiple independent streams of
 // arithmetic operations concurrently (e.g. current Intel and AMD CPUs can
 // process two independent FMAs per CPU cycle). If we only feed those with a
-// single stream of instructions that depend on each other, we lose perf, as
-// demonstrated in this example.
-//
-// Do not tune this too high or you will run out of CPU registers!
-//
-// For simplicity, we assume it's a power of two.
-//
-const CHUNK_VECS: usize = 4;
+// single stream of instructions that depend on each other, we lose performance,
+// as demonstrated in this example.
+const ILP_STREAMS: usize = 4;
 
 // Scalar and vector type
 type Scalar = f32;
@@ -81,18 +76,21 @@ macro_rules! generate_simple_dot {
 generate_simple_dot!(simple_dot_static, "static");
 generate_simple_dot!(simple_dot_dynamic, "default");
 
-/// More advanced SIMD dot product with parallel instruction streams
+/// More advanced SIMD dot product with instruction-level parallelism and
+/// Fused Multiply-Add.
+///
+/// While it may seem unfair to the simple version that FMA is only used in this
+/// version, it is actually only beneficial here because the simple version is
+/// latency-bound and FMA has a higher latency than addition.
 macro_rules! generate_parallel_dot {
     ($name:ident, $dispatcher:literal) => {
         #[inline(never)]
         #[multiversion(targets = "simd", dispatcher = $dispatcher)]
         fn $name(lhs: &Vector, rhs: &Vector) -> Scalar {
-            // Work as in simple_dot, but with multiple SIMD accumulators
-            // (this uses the iterator_ilp crate to avoid manual loop unrolling)
             (&lhs.0[..], &rhs.0[..])
                 .vectorize()
                 .into_iter()
-                .fold_ilp::<CHUNK_VECS, _>(
+                .fold_ilp::<ILP_STREAMS, _>(
                     || V::splat(0.0),
                     |acc, (lvec, rvec)| {
                         if target_cfg_f!(target_feature = "fma") {
