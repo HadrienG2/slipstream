@@ -13,7 +13,7 @@ use std::time::Instant;
 // This small vector size is chosen such that the working set fits in L1 cache,
 // which is required to get optimal performance out of SIMD.
 //
-// The vector size should be divisible by `V::LANES * CHUNK_VECS`.
+// The vector size should be divisible by `V::LANES * ILP_STREAMS`.
 //
 const SIZE: usize = 4096;
 
@@ -25,6 +25,10 @@ const SIZE: usize = 4096;
 // process two independent FMAs per CPU cycle). If we only feed those with a
 // single stream of instructions that depend on each other, we lose performance,
 // as demonstrated in this example.
+//
+// Do not tune this too high, otherwise you will run out of CPU registers or the
+// compiler optimizer will give up and trash your code!
+//
 const ILP_STREAMS: usize = 4;
 
 // Scalar and vector type

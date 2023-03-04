@@ -20,26 +20,15 @@ use std::time::Instant;
 // which means we don't have to implement cache blocking optimizations to achive
 // compute-bound performance and show the optimal effect of SIMD.
 //
-// The matrix size should be divisible by `V::LANES * CHUNK_VECS`.
+// The matrix size should be divisible by `V::LANES * ILP_STREAMS`.
 //
 const SIZE: usize = 80;
 
-// Number of output SIMD vectors we process together
+// Number of output SIMD vectors we process in parallel
 //
-// This should be greater than one for several reasons:
-// - Most compute-oriented CPUs can process multiple independent streams of
-//   arithmetic operations concurrently (e.g. current Intel and AMD CPUs can
-//   process two independent FMAs per CPU cycle). If we only feed those with a
-//   single stream of instructions that depend on each other, we lose perf.
-// - It is the granularity at which we amortize non-arithmetic operations like
-//   loop control code and scalar element broadcasting.
+// See the dot product example for more details on this operation
 //
-// The dot product example does both with and without parallel streams if you
-// want to gauge their importance on a simpler operation.
-//
-// Do not tune it too high or you will run out of CPU registers!
-//
-const CHUNK_VECS: usize = 10;
+const ILP_STREAMS: usize = 10;
 
 // Vector type
 type Scalar = f32;
@@ -87,51 +76,59 @@ macro_rules! generate_mat_mult {
         #[inline(never)]
         #[multiversion(targets = "simd", dispatcher = $dispatcher)]
         fn $name(lhs: &Matrix, rhs: &Matrix) -> Matrix {
-            // For SIMD and ILP reasons, we'll slice matrix rows into chunks of
-            // a certain number of elements. For simplicity, we assume that this
-            // chunk size divides the matrix row size evenly.
-            const CHUNK_ELEMS: usize = CHUNK_VECS * V::LANES;
-            assert_eq!(SIZE % CHUNK_ELEMS, 0);
+            // We will produce output vectors in batches of ILP_STREAMS vectors,
+            // assuming that each row cleanly divides into batches for simplicity
+            const CHUNK_SIZE: usize = V::LANES * ILP_STREAMS;
+            assert_eq!(SIZE % CHUNK_SIZE, 0);
+            const CHUNKS_PER_ROW: usize = SIZE / CHUNK_SIZE;
 
             // Set up output buffer
+            // FIXME: Use overaligned storage here too
             const NUM_ELEMS: usize = SIZE * SIZE;
             let mut out = vec![0.0; NUM_ELEMS];
 
-            // Let the compiler know that input matrices are the same size
-            let lhs = &lhs.0[..NUM_ELEMS];
-            let rhs = &rhs.0[..NUM_ELEMS];
+            // Vectorize the right-hand-side matrix upfront
+            let mut rhs_vecs = (&rhs.0[..]).vectorize();
 
-            // Iterate over output and lhs rows
-            for (out_row, lhs_row) in out.chunks_exact_mut(SIZE).zip(lhs.chunks_exact(SIZE)) {
-                // Chunk down output row into bits that fit in CPU registers
-                for (chunk, out_chunk) in out_row.chunks_exact_mut(CHUNK_ELEMS).enumerate() {
-                    // Set up output accumulators (compiler will keep them in registers)
-                    let mut out_accs = [V::default(); CHUNK_VECS];
+            // Jointly iterate over output and lhs rows
+            for (out_row, lhs_row) in out.chunks_exact_mut(SIZE).zip(lhs.0.chunks_exact(SIZE)) {
+                // Prepare to concurrently generate ILP_STREAMS output vectors
+                // within the current row. Keep track of where we are in the row.
+                for (chunk_idx, mut out_chunk) in out_row
+                    .vectorize()
+                    // FIXME: array_chunks doesn't optimize well, fix that
+                    .array_chunks::<ILP_STREAMS>()
+                    .enumerate()
+                {
+                    // Set up output accumulators
+                    let mut accumulators = [V::default(); ILP_STREAMS];
 
-                    // Iterate over columns of lhs and rows of rhs, and within
-                    // the selected rows of rhs, target the chunk that
-                    // corresponds to the output chunk that we're generating
-                    for (lhs_elem, rhs_chunk) in lhs_row.iter().zip(
-                        rhs.chunks_exact(CHUNK_ELEMS)
-                            .skip(chunk)
-                            .step_by(SIZE / CHUNK_ELEMS),
+                    // Jointly iterate over columns of lhs and rows and rhs.
+                    // Within the selected row of rhs, target the columns that
+                    // correspond to the output columns that we're generating.
+                    for (&lhs_elem, rhs_chunk) in lhs_row.iter().zip(
+                        rhs_vecs
+                            // FIXME: array_chunks doesn't optimize well, fix that
+                            .array_chunks::<ILP_STREAMS>()
+                            .skip(chunk_idx)
+                            .step_by(CHUNKS_PER_ROW),
                     ) {
-                        // Turn active lhs element into a vector
-                        let lhs_elem_vec = V::splat(*lhs_elem);
+                        // Turn the active lhs element into a vector
+                        let lhs_elem_vec = V::splat(lhs_elem);
 
-                        // Add contribution from rhs chunk to the accumulator
-                        for (out_acc, rhs_vec) in (&mut out_accs, rhs_chunk).vectorize() {
+                        // Add contribution from this rhs row to the output accumulator
+                        for (acc, &rhs_vec) in accumulators.iter_mut().zip(rhs_chunk.iter()) {
                             if target_cfg_f!(target_feature = "fma") {
-                                *out_acc = lhs_elem_vec.mul_add(rhs_vec, *out_acc);
+                                *acc = lhs_elem_vec.mul_add(rhs_vec, *acc);
                             } else {
-                                *out_acc += lhs_elem_vec * rhs_vec;
+                                *acc += lhs_elem_vec * rhs_vec;
                             }
                         }
                     }
 
-                    // Spill output accumulators into output storage
-                    for (mut out_chunk, out_acc) in (out_chunk, out_accs).vectorize() {
-                        *out_chunk = out_acc;
+                    // Write down results into output storage
+                    for (out_vec, &acc) in out_chunk.iter_mut().zip(accumulators.iter()) {
+                        **out_vec = acc;
                     }
                 }
             }
