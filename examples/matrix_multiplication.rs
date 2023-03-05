@@ -22,13 +22,13 @@ use std::time::Instant;
 //
 // The matrix size should be divisible by `V::LANES * ILP_STREAMS`.
 //
-const SIZE: usize = 80;
+const SIZE: usize = 64;
 
 // Number of output SIMD vectors we process in parallel
 //
 // See the dot product example for more details on this operation
 //
-const ILP_STREAMS: usize = 10;
+const ILP_STREAMS: usize = 8;
 
 // Vector type
 type Scalar = f32;
