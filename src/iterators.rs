@@ -836,6 +836,15 @@ pub mod experimental {
             self.get(self.len - 1)
         }
 
+        /// Like get(), but panic if idx is out of range
+        //
+        // NOTE: We can't implement the real Index trait because it requires
+        //       returning a &V that we don't have for padded/unaligned data.
+        #[inline(always)]
+        pub fn index(&mut self, idx: usize) -> Data::ElementRef<'_> {
+            self.get(idx).expect("Index is out of range 0..len")
+        }
+
         /// Returns the N-th element of the container
         // TODO: Generalize to subslices, but without using SliceIndex since
         //       that's not yet in stable Rust.
@@ -885,9 +894,10 @@ pub mod experimental {
             })
         }
 
-        // TODO: rchunks(_exact)?, split_at, r?split_array, split(_inclusive)?,
-        //       rsplit(_inclusive)?, r?splitn
-        // TODO: Index by anything that get accepts
+        // TODO: rchunks(_exact)?, split_at, r?split(_inclusive)?, r?splitn,
+        //       contains, (starts|ends)_with,
+        //       (sort|select_nth|binary_search)(_unstable)?_by((_cached)?_key)?,
+        //       copy_from_slice (optimiser !), partition_point
     }
 
     macro_rules! impl_iterator {
