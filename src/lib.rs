@@ -259,8 +259,9 @@ pub mod types;
 pub mod vector;
 pub mod vectorize;
 
-use iterators::experimental::Vectorized;
-pub use iterators::experimental::{VectorInfo, Vectorizable, Vectors};
+pub use iterators::experimental::{
+    AlignedVectors, PaddedVectors, UnalignedVectors, VectorInfo, Vectorizable,
+};
 pub use mask::Mask;
 pub use types::*;
 pub use vector::Vector;
@@ -419,7 +420,7 @@ mod inner {
 /// }
 /// ```
 #[inline(always)]
-pub fn vectorize<V, A>(a: A) -> Vectors<V, <A::Vectorized as Vectorized<V>>::Unaligned>
+pub fn vectorize<V, A>(a: A) -> UnalignedVectors<V, A::Vectorized>
 where
     A: Vectorizable<V>,
     V: VectorInfo,
@@ -438,7 +439,7 @@ where
 /// assert_eq!(v, vec![i32x4::new([1, 2, 3, 4]), i32x4::new([5, 6, -1, -1])]);
 /// ```
 #[inline(always)]
-pub fn vectorize_pad<V, A>(a: A, pad: V::Scalar) -> Vectors<V, A::Vectorized>
+pub fn vectorize_pad<V, A>(a: A, pad: V::Scalar) -> PaddedVectors<V, A::Vectorized>
 where
     A: Vectorizable<V>,
     V: VectorInfo,
@@ -457,7 +458,7 @@ where
 /// assert_eq!(v, vec![i32x4::new([1, 2, 3, 4]), i32x4::new([5, 6, 7, 8])]);
 /// ```
 #[inline(always)]
-pub fn vectorize_aligned<V, A>(a: A) -> Vectors<V, <A::Vectorized as Vectorized<V>>::Aligned>
+pub fn vectorize_aligned<V, A>(a: A) -> AlignedVectors<V, A::Vectorized>
 where
     A: Vectorizable<V>,
     V: VectorInfo,
