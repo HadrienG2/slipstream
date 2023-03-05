@@ -276,7 +276,28 @@ pub mod experimental {
     //
     impl<'target, V: VectorInfo> From<&'target [V]> for AlignedVectors<'target, V> {
         fn from(data: &'target [V]) -> Self {
-            Self(NonNull::from(data).cast::<V>(), PhantomData)
+            unsafe { Self::from_data_ptr(NonNull::from(data)) }
+        }
+    }
+    //
+    impl<'target, V: VectorInfo> AlignedVectors<'target, V> {
+        /// Construct from raw pointer to a slice of data
+        ///
+        /// # Safety
+        ///
+        /// It must be valid to access the slice behind `ptr` for lifetime 'target
+        unsafe fn from_data_ptr(ptr: NonNull<[V]>) -> Self {
+            Self(ptr.cast::<V>(), PhantomData)
+        }
+
+        /// Base pointer used by get_unchecked(idx)
+        ///
+        /// # Safety
+        ///
+        /// `idx` must be in range for the surrounding slice
+        #[inline(always)]
+        unsafe fn get_ptr(&self, idx: usize) -> NonNull<V> {
+            unsafe { NonNull::new_unchecked(self.0.as_ptr().add(idx)) }
         }
     }
     //
@@ -290,7 +311,7 @@ pub mod experimental {
     unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedVectors<'target, V> {
         #[inline(always)]
         unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
-            unsafe { *self.0.as_ptr().add(idx) }
+            unsafe { *self.get_ptr(idx).as_ref() }
         }
 
         unsafe fn as_unaligned_unchecked(self) -> Self {
@@ -331,11 +352,17 @@ pub mod experimental {
     // --- Internal docs start here ---
     //
     // Base pointer of an `&mut [Vector]` slice, tagged with lifetime information
-    pub struct AlignedVectorsMut<'target, V: VectorInfo>(NonNull<V>, PhantomData<&'target mut [V]>);
+    pub struct AlignedVectorsMut<'target, V: VectorInfo>(
+        AlignedVectors<'target, V>,
+        PhantomData<&'target mut [V]>,
+    );
     //
     impl<'target, V: VectorInfo> From<&'target mut [V]> for AlignedVectorsMut<'target, V> {
         fn from(data: &'target mut [V]) -> Self {
-            Self(NonNull::from(data).cast::<V>(), PhantomData)
+            Self(
+                unsafe { AlignedVectors::from_data_ptr(NonNull::from(data)) },
+                PhantomData,
+            )
         }
     }
     //
@@ -349,7 +376,7 @@ pub mod experimental {
     unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedVectorsMut<'target, V> {
         #[inline(always)]
         unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> &mut V {
-            unsafe { &mut *self.0.as_ptr().add(idx) }
+            unsafe { self.0.get_ptr(idx).as_mut() }
         }
 
         unsafe fn as_unaligned_unchecked(self) -> Self {
@@ -376,11 +403,20 @@ pub mod experimental {
     //
     impl<'target, V: VectorInfo> From<&'target [V::Scalar]> for UnalignedVectors<'target, V> {
         fn from(data: &'target [V::Scalar]) -> Self {
-            Self(NonNull::from(data).cast::<V::Array>(), PhantomData)
+            unsafe { Self::from_data_ptr(NonNull::from(data)) }
         }
     }
     //
     impl<'target, V: VectorInfo> UnalignedVectors<'target, V> {
+        /// Construct from raw pointer to a slice of data
+        ///
+        /// # Safety
+        ///
+        /// It must be valid to access the slice behind `ptr` for lifetime 'target
+        unsafe fn from_data_ptr(ptr: NonNull<[V::Scalar]>) -> Self {
+            Self(ptr.cast::<V::Array>(), PhantomData)
+        }
+
         /// Base pointer used by get_unchecked(idx)
         ///
         /// # Safety
@@ -402,7 +438,7 @@ pub mod experimental {
     unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedVectors<'target, V> {
         #[inline(always)]
         unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
-            unsafe { self.get_ptr(idx).as_ptr().read() }.into()
+            unsafe { *self.get_ptr(idx).as_ref() }.into()
         }
 
         unsafe fn as_unaligned_unchecked(self) -> Self {
@@ -434,7 +470,10 @@ pub mod experimental {
     //
     impl<'target, V: VectorInfo> From<&'target mut [V::Scalar]> for UnalignedVectorsMut<'target, V> {
         fn from(data: &'target mut [V::Scalar]) -> Self {
-            Self((&data[..]).into(), PhantomData)
+            Self(
+                unsafe { UnalignedVectors::from_data_ptr(NonNull::from(data)) },
+                PhantomData,
+            )
         }
     }
     //
@@ -447,12 +486,10 @@ pub mod experimental {
     //
     unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedVectorsMut<'target, V> {
         #[inline(always)]
-        unsafe fn get_unchecked(&mut self, idx: usize, is_last: bool) -> UnalignedMut<'_, V> {
-            UnalignedMut {
-                vector: self.0.get_unchecked(idx, is_last),
-                target: self.0.get_ptr(idx),
-                lifetime: PhantomData,
-            }
+        unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> UnalignedMut<'_, V> {
+            let target = self.0.get_ptr(idx).as_mut();
+            let vector = V::from(*target);
+            UnalignedMut { vector, target }
         }
 
         unsafe fn as_unaligned_unchecked(self) -> Self {
@@ -460,7 +497,7 @@ pub mod experimental {
         }
 
         unsafe fn as_aligned_unchecked(self) -> AlignedVectorsMut<'target, V> {
-            AlignedVectorsMut(self.0.as_aligned_unchecked().0, PhantomData)
+            AlignedVectorsMut(self.0.as_aligned_unchecked(), PhantomData)
         }
     }
 
@@ -472,8 +509,7 @@ pub mod experimental {
     /// closely to &mut Vector as possible.
     pub struct UnalignedMut<'target, V: VectorInfo> {
         vector: V,
-        target: NonNull<V::Array>,
-        lifetime: PhantomData<&'target mut V>,
+        target: &'target mut V::Array,
     }
     //
     impl<V: VectorInfo> Deref for UnalignedMut<'_, V> {
@@ -495,7 +531,7 @@ pub mod experimental {
     impl<V: VectorInfo> Drop for UnalignedMut<'_, V> {
         #[inline(always)]
         fn drop(&mut self) {
-            unsafe { self.target.as_ptr().write(self.vector.into()) }
+            *self.target = self.vector.into()
         }
     }
 
@@ -503,8 +539,9 @@ pub mod experimental {
     //
     // --- Internal docs start here ---
     //
-    // Unaligned &[Vector] with a vector that will be emitted in place of
-    // (possibly out-of-bounds) slice data when the last element is requested.
+    // Base pointer to an unaligned &[Vector] slice with a vector that will be
+    // emitted in place of (possibly out-of-bounds) slice data when the last
+    // element is requested.
     #[derive(Copy, Clone)]
     pub struct PaddedScalars<'target, V: VectorInfo> {
         vectors: UnalignedVectors<'target, V>,
@@ -606,8 +643,9 @@ pub mod experimental {
     //
     // --- Internal docs start here ---
     //
-    // Unaligned &[Vector] with a vector that will be emitted in place of
-    // (possibly out-of-bounds) slice data when the last element is requested.
+    // Base pointer to an unaligned &mut [Vector] slice with a vector that will
+    // be emitted in place of (possibly out-of-bounds) slice data when the last
+    // element is requested.
     pub struct PaddedScalarsMut<'target, V: VectorInfo> {
         inner: PaddedScalars<'target, V>,
         num_last_elems: usize,
@@ -657,7 +695,7 @@ pub mod experimental {
         }
 
         unsafe fn as_aligned_unchecked(self) -> AlignedVectorsMut<'target, V> {
-            unsafe { AlignedVectorsMut(self.inner.as_aligned_unchecked().0, PhantomData) }
+            unsafe { AlignedVectorsMut(self.inner.as_aligned_unchecked(), PhantomData) }
         }
     }
 
