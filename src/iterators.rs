@@ -1185,7 +1185,7 @@ pub mod experimental {
         /// - If the data is not in a SIMD-optimized layout.
         /// - If called on a tuple and not all tuple elements yield the same
         ///   amount of SIMD elements.
-        fn vectorized_aligned(self) -> AlignedVectors<V, Self::Vectorized> {
+        fn vectorize_aligned(self) -> AlignedVectors<V, Self::Vectorized> {
             let (base, len) = self.into_vectorized_parts(None).unwrap();
             unsafe { Vectors::from_raw_parts(base.as_aligned_unchecked(), len) }
         }
