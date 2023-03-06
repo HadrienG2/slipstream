@@ -39,7 +39,7 @@ pub mod experimental {
         iter::FusedIterator,
         marker::PhantomData,
         mem::MaybeUninit,
-        ops::{Deref, DerefMut},
+        ops::{Deref, DerefMut, Range, RangeFrom, RangeFull, RangeTo},
         ptr::NonNull,
     };
     use iterator_ilp::TrustedLowerBound;
@@ -197,7 +197,7 @@ pub mod experimental {
             Self: 'result;
 
         /// Slice view of this dataset
-        type Slice<'result>: Vectorized<V> + VectorizedImpl<V>
+        type Slice<'result>: Vectorized<V> + VectorizedSliceImpl<V>
         where
             Self: 'result;
 
@@ -259,25 +259,6 @@ pub mod experimental {
         /// owned data into slices.
         fn as_slice(&mut self) -> Self::Slice<'_>;
 
-        /// Divides this dataset into two at an index, without doing bounds
-        /// checking, and returns slices targeting the two halves of the dataset
-        ///
-        /// The first slice will contain all indices from `[0, mid)` (excluding
-        /// the index `mid` itself) and the second will contain all indices from
-        /// `mid` to the end of the dataset.
-        ///
-        /// # Safety
-        ///
-        /// - Calling this method with an out-of-bounds index is undefined
-        ///   behavior even if the resulting reference is not used. The caller
-        ///   has to ensure that 0 <= mid <= len.
-        /// - `len` must be the true slice length.
-        unsafe fn split_at_unchecked(
-            &mut self,
-            mid: usize,
-            len: usize,
-        ) -> (Self::Slice<'_>, Self::Slice<'_>);
-
         /// Unsafely cast this data to the equivalent slice or collection of
         /// unaligned `Vector`s
         ///
@@ -294,6 +275,32 @@ pub mod experimental {
         /// The underlying scalar data must be aligned like V and have a number
         /// of elements that is a multiple of `V::LANES`.
         unsafe fn as_aligned_unchecked(self) -> Self::Aligned;
+    }
+
+    /// `VectorizedImpl` that is a true slice, i.e. does not own its elements
+    /// and can be split
+    #[doc(hidden)]
+    pub unsafe trait VectorizedSliceImpl<V: VectorInfo>: VectorizedImpl<V> + Sized {
+        /// Divides this slice into two at an index, without doing bounds
+        /// checking, and returns slices targeting the two halves of the dataset
+        ///
+        /// The first slice will contain all indices from `[0, mid)` (excluding
+        /// the index `mid` itself) and the second will contain all indices from
+        /// `mid` to the end of the dataset.
+        ///
+        /// # Safety
+        ///
+        /// - Calling this method with an out-of-bounds index is undefined
+        ///   behavior even if the resulting reference is not used. The caller
+        ///   has to ensure that mid <= len.
+        /// - `len` must be the length of the underlying `Vectors` slice.
+        //
+        // NOTE: Not being able to say that the output has lower lifetime than
+        //       Self will cause lifetime issues, but being able to say that a
+        //       slice of a slice is a slice is more important, and
+        //       unfortunately we don't have access to Rust's subtyping and
+        //       variance since we're not manipulating true references.
+        unsafe fn split_at_unchecked(self, mid: usize, len: usize) -> (Self, Self);
     }
 
     /// Read access to aligned SIMD data
@@ -350,22 +357,20 @@ pub mod experimental {
             AlignedData(self.0, PhantomData)
         }
 
-        #[inline]
-        unsafe fn split_at_unchecked(
-            &mut self,
-            mid: usize,
-            _len: usize,
-        ) -> (AlignedData<'_, V>, AlignedData<'_, V>) {
-            let wrap = |ptr| AlignedData(ptr, PhantomData);
-            (wrap(self.0), wrap(self.get_ptr(mid)))
-        }
-
         unsafe fn as_unaligned_unchecked(self) -> Self {
             self
         }
 
         unsafe fn as_aligned_unchecked(self) -> Self {
             self
+        }
+    }
+    //
+    unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for AlignedData<'target, V> {
+        #[inline]
+        unsafe fn split_at_unchecked(self, mid: usize, _len: usize) -> (Self, Self) {
+            let wrap = |ptr| Self(ptr, PhantomData);
+            (wrap(self.0), wrap(self.get_ptr(mid)))
         }
     }
 
@@ -388,18 +393,6 @@ pub mod experimental {
         #[inline]
         fn as_slice(&mut self) -> AlignedData<'_, V> {
             (&self[..]).into()
-        }
-
-        #[inline]
-        unsafe fn split_at_unchecked(
-            &mut self,
-            mid: usize,
-            _len: usize,
-        ) -> (AlignedData<'_, V>, AlignedData<'_, V>) {
-            // TODO: Use split_at_unchecked once stable
-            let (left, right) = self.split_at(mid);
-            let wrap = |data| AlignedData::from(data);
-            (wrap(left), wrap(right))
         }
 
         unsafe fn as_unaligned_unchecked(self) -> Self {
@@ -449,23 +442,21 @@ pub mod experimental {
             AlignedDataMut(self.0.as_slice(), PhantomData)
         }
 
-        #[inline]
-        unsafe fn split_at_unchecked(
-            &mut self,
-            mid: usize,
-            len: usize,
-        ) -> (AlignedDataMut<'_, V>, AlignedDataMut<'_, V>) {
-            let (left, right) = self.0.split_at_unchecked(mid, len);
-            let wrap = |inner| AlignedDataMut(inner, PhantomData);
-            (wrap(left), wrap(right))
-        }
-
         unsafe fn as_unaligned_unchecked(self) -> Self {
             self
         }
 
         unsafe fn as_aligned_unchecked(self) -> Self {
             self
+        }
+    }
+    //
+    unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for AlignedDataMut<'target, V> {
+        #[inline]
+        unsafe fn split_at_unchecked(self, mid: usize, len: usize) -> (Self, Self) {
+            let (left, right) = self.0.split_at_unchecked(mid, len);
+            let wrap = |inner| Self(inner, PhantomData);
+            (wrap(left), wrap(right))
         }
     }
 
@@ -525,16 +516,6 @@ pub mod experimental {
             UnalignedData(self.0, PhantomData)
         }
 
-        #[inline]
-        unsafe fn split_at_unchecked(
-            &mut self,
-            mid: usize,
-            _len: usize,
-        ) -> (UnalignedData<'_, V>, UnalignedData<'_, V>) {
-            let wrap = |ptr| UnalignedData(ptr, PhantomData);
-            (wrap(self.0), wrap(self.get_ptr(mid)))
-        }
-
         unsafe fn as_unaligned_unchecked(self) -> Self {
             self
         }
@@ -547,6 +528,14 @@ pub mod experimental {
                 "Asked to treat an unaligned pointer as aligned, which is Undefined Behavior"
             );
             AlignedData(self.0.cast::<V>(), PhantomData)
+        }
+    }
+    //
+    unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for UnalignedData<'target, V> {
+        #[inline]
+        unsafe fn split_at_unchecked(self, mid: usize, _len: usize) -> (Self, Self) {
+            let wrap = |ptr| Self(ptr, PhantomData);
+            (wrap(self.0), wrap(self.get_ptr(mid)))
         }
     }
 
@@ -592,23 +581,21 @@ pub mod experimental {
             UnalignedDataMut(self.0.as_slice(), PhantomData)
         }
 
-        #[inline]
-        unsafe fn split_at_unchecked(
-            &mut self,
-            mid: usize,
-            len: usize,
-        ) -> (UnalignedDataMut<'_, V>, UnalignedDataMut<'_, V>) {
-            let (left, right) = self.0.split_at_unchecked(mid, len);
-            let wrap = |inner| UnalignedDataMut(inner, PhantomData);
-            (wrap(left), wrap(right))
-        }
-
         unsafe fn as_unaligned_unchecked(self) -> Self {
             self
         }
 
         unsafe fn as_aligned_unchecked(self) -> AlignedDataMut<'target, V> {
             AlignedDataMut(self.0.as_aligned_unchecked(), PhantomData)
+        }
+    }
+    //
+    unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for UnalignedDataMut<'target, V> {
+        #[inline]
+        unsafe fn split_at_unchecked(self, mid: usize, len: usize) -> (Self, Self) {
+            let (left, right) = self.0.split_at_unchecked(mid, len);
+            let wrap = |inner| Self(inner, PhantomData);
+            (wrap(left), wrap(right))
         }
     }
 
@@ -753,16 +740,22 @@ pub mod experimental {
             }
         }
 
+        unsafe fn as_unaligned_unchecked(self) -> UnalignedData<'target, V> {
+            self.vectors
+        }
+
+        unsafe fn as_aligned_unchecked(self) -> AlignedData<'target, V> {
+            unsafe { self.vectors.as_aligned_unchecked() }
+        }
+    }
+    //
+    unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for PaddedData<'target, V> {
         #[inline]
-        unsafe fn split_at_unchecked(
-            &mut self,
-            mid: usize,
-            len: usize,
-        ) -> (PaddedData<'_, V>, PaddedData<'_, V>) {
+        unsafe fn split_at_unchecked(mut self, mid: usize, len: usize) -> (Self, Self) {
             if mid < len {
                 let left_last_vector = self.vectors.get_unchecked(mid, mid == len - 1);
                 let (left_vectors, right_vectors) = self.vectors.split_at_unchecked(mid, len);
-                let wrap = |vectors, last_vector| PaddedData {
+                let wrap = |vectors, last_vector| Self {
                     vectors,
                     last_vector,
                 };
@@ -771,16 +764,8 @@ pub mod experimental {
                     wrap(right_vectors, self.last_vector),
                 )
             } else {
-                (self.as_slice(), PaddedData::empty())
+                (self, Self::empty())
             }
-        }
-
-        unsafe fn as_unaligned_unchecked(self) -> UnalignedData<'target, V> {
-            self.vectors
-        }
-
-        unsafe fn as_aligned_unchecked(self) -> AlignedData<'target, V> {
-            unsafe { self.vectors.as_aligned_unchecked() }
         }
     }
 
@@ -869,16 +854,22 @@ pub mod experimental {
             }
         }
 
+        unsafe fn as_unaligned_unchecked(self) -> UnalignedDataMut<'target, V> {
+            unsafe { UnalignedDataMut(self.inner.as_unaligned_unchecked(), PhantomData) }
+        }
+
+        unsafe fn as_aligned_unchecked(self) -> AlignedDataMut<'target, V> {
+            unsafe { AlignedDataMut(self.inner.as_aligned_unchecked(), PhantomData) }
+        }
+    }
+    //
+    unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for PaddedDataMut<'target, V> {
         #[inline]
-        unsafe fn split_at_unchecked(
-            &mut self,
-            mid: usize,
-            len: usize,
-        ) -> (PaddedDataMut<'_, V>, PaddedDataMut<'_, V>) {
+        unsafe fn split_at_unchecked(self, mid: usize, len: usize) -> (Self, Self) {
             if mid < len {
                 let left_num_last_elems = self.num_elems(mid == len - 1);
                 let (left_inner, right_inner) = self.inner.split_at_unchecked(mid, len);
-                let wrap = |inner, num_last_elems| PaddedDataMut {
+                let wrap = |inner, num_last_elems| Self {
                     inner,
                     num_last_elems,
                     lifetime: PhantomData,
@@ -888,16 +879,8 @@ pub mod experimental {
                     wrap(right_inner, self.num_last_elems),
                 )
             } else {
-                (self.as_slice(), PaddedDataMut::empty())
+                (self, Self::empty())
             }
-        }
-
-        unsafe fn as_unaligned_unchecked(self) -> UnalignedDataMut<'target, V> {
-            unsafe { UnalignedDataMut(self.inner.as_unaligned_unchecked(), PhantomData) }
-        }
-
-        unsafe fn as_aligned_unchecked(self) -> AlignedDataMut<'target, V> {
-            unsafe { AlignedDataMut(self.inner.as_aligned_unchecked(), PhantomData) }
         }
     }
 
@@ -971,17 +954,6 @@ pub mod experimental {
                     ($($t.as_slice(),)*)
                 }
 
-                #[inline]
-                unsafe fn split_at_unchecked(
-                    &mut self,
-                    mid: usize,
-                    len: usize,
-                ) -> (Self::Slice<'_>, Self::Slice<'_>) {
-                    let ($($t,)*) = self;
-                    let ($($t,)*) = unsafe { ($($t.split_at_unchecked(mid, len),)*) };
-                    (($($t.0,)*), ($($t.1,)*))
-                }
-
                 unsafe fn as_unaligned_unchecked(self) -> Self::Unaligned {
                     let ($($t,)*) = self;
                     unsafe { ($($t.as_unaligned_unchecked(),)*) }
@@ -990,6 +962,24 @@ pub mod experimental {
                 unsafe fn as_aligned_unchecked(self) -> Self::Aligned {
                     let ($($t,)*) = self;
                     unsafe { ($($t.as_aligned_unchecked(),)*) }
+                }
+            }
+
+            #[allow(non_snake_case)]
+            unsafe impl<
+                'target,
+                V: VectorInfo
+                $(, $t: VectorizedSliceImpl<V> + 'target)*
+            > VectorizedSliceImpl<V> for ($($t,)*) {
+                #[inline]
+                unsafe fn split_at_unchecked(
+                    self,
+                    mid: usize,
+                    len: usize,
+                ) -> (Self, Self) {
+                    let ($($t,)*) = self;
+                    let ($($t,)*) = unsafe { ($($t.split_at_unchecked(mid, len),)*) };
+                    (($($t.0,)*), ($($t.1,)*))
                 }
             }
         };
@@ -1013,7 +1003,7 @@ pub mod experimental {
     /// with iteration and indexing operations yielding the type that is
     /// described in the documentation of `Vectorizable`.
     #[derive(Copy, Clone)]
-    pub struct Vectors<V: VectorInfo, Data: Vectorized<V> + VectorizedImpl<V>> {
+    pub struct Vectors<V: VectorInfo, Data: VectorizedImpl<V>> {
         data: Data,
         len: usize,
         vectors: PhantomData<V>,
@@ -1062,27 +1052,29 @@ pub mod experimental {
             self.len - 1
         }
 
-        /// Like get(), but panic if idx is out of range
+        /// Like get(), but panic if index is out of range
+        ///
+        /// # Panics
+        ///
+        /// If index is out of range
         //
         // NOTE: We can't implement the real Index trait because it requires
         //       returning a &V that we don't have for padded/unaligned data.
-        // TODO: Generalize to subslices, but without using SliceIndex since
-        //       that's not yet in stable Rust.
         #[inline(always)]
-        pub fn index(&mut self, idx: usize) -> Data::ElementRef<'_> {
-            self.get(idx).expect("Index is out of range")
+        pub fn index<I>(&mut self, index: I) -> <I as VectorIndex<V, Data>>::Output<'_>
+        where
+            I: VectorIndex<V, Data>,
+        {
+            self.get(index).expect("Index is out of range")
         }
 
         /// Returns the N-th element of the container
-        // TODO: Generalize to subslices, but without using SliceIndex since
-        //       that's not yet in stable Rust.
         #[inline(always)]
-        pub fn get(&mut self, idx: usize) -> Option<Data::ElementRef<'_>> {
-            if (0..self.len).contains(&idx) {
-                Some(unsafe { self.get_unchecked(idx) })
-            } else {
-                None
-            }
+        pub fn get<I>(&mut self, index: I) -> Option<<I as VectorIndex<V, Data>>::Output<'_>>
+        where
+            I: VectorIndex<V, Data>,
+        {
+            (index.is_valid_index(self)).then(move || unsafe { self.get_unchecked(index) })
         }
 
         /// Returns the N-th element of the container without bounds checking
@@ -1090,12 +1082,15 @@ pub mod experimental {
         /// # Safety
         ///
         /// `idx` must be in range `0..self.len()`
-        //
-        // TODO: Generalize to subslices, but without using SliceIndex since
-        //       that's not yet in stable Rust.
         #[inline(always)]
-        pub unsafe fn get_unchecked(&mut self, idx: usize) -> Data::ElementRef<'_> {
-            unsafe { self.data.get_unchecked(idx, idx == self.last_idx()) }
+        pub unsafe fn get_unchecked<I>(
+            &mut self,
+            index: I,
+        ) -> <I as VectorIndex<V, Data>>::Output<'_>
+        where
+            I: VectorIndex<V, Data>,
+        {
+            unsafe { index.get_unchecked(self) }
         }
 
         /// Returns an iterator over contained elements
@@ -1131,7 +1126,7 @@ pub mod experimental {
             unsafe { Vectors::from_raw_parts(self.data.as_slice(), self.len) }
         }
 
-        /// Divides into two slices at an index
+        /// Divides a slice into two at an index
         ///
         /// The first will contain all indices from `[0, mid)` (excluding the
         /// index `mid` itself) and the second will contain all indices from
@@ -1141,15 +1136,15 @@ pub mod experimental {
         ///
         /// Panics if mid > len
         #[inline]
-        pub fn split_at(
-            &mut self,
-            mid: usize,
-        ) -> (VectorSlice<'_, V, Data>, VectorSlice<'_, V, Data>) {
+        pub fn split_at(self, mid: usize) -> (Self, Self)
+        where
+            Data: VectorizedSliceImpl<V>,
+        {
             assert!(mid <= self.len(), "Split point is out of range");
             unsafe { self.split_at_unchecked(mid) }
         }
 
-        /// Divides into two slices at an index, without doing bounds checking
+        /// Divides a slice into two at an index, without doing bounds checking
         ///
         /// The first will contain all indices from `[0, mid)` (excluding the
         /// index `mid` itself) and the second will contain all indices from
@@ -1163,10 +1158,10 @@ pub mod experimental {
         /// behavior even if the resulting reference is not used. The caller has
         /// to ensure that 0 <= mid <= self.len().
         #[inline]
-        pub unsafe fn split_at_unchecked(
-            &mut self,
-            mid: usize,
-        ) -> (VectorSlice<'_, V, Data>, VectorSlice<'_, V, Data>) {
+        pub unsafe fn split_at_unchecked(self, mid: usize) -> (Self, Self)
+        where
+            Data: VectorizedSliceImpl<V>,
+        {
             let total_len = self.len();
             let (left_data, right_data) = unsafe { self.data.split_at_unchecked(mid, total_len) };
             let wrap = |data, len| unsafe { Vectors::from_raw_parts(data, len) };
@@ -1178,6 +1173,115 @@ pub mod experimental {
         //       (sort|select_nth|binary_search)(_unstable)?_by((_cached)?_key)?,
         //       copy_from_slice (optimiser !), partition_point
     }
+
+    /// A helper trait used for indexing operations
+    ///
+    /// Analogous to the standard (unstable)
+    /// [`SliceIndex`](core::slice::SliceIndex) trait, but for `Vectors`.
+    ///
+    /// # Safety
+    ///
+    /// Unsafe code can rely on this trait being implemented correctly
+    pub unsafe trait VectorIndex<V: VectorInfo, Data: VectorizedImpl<V>> {
+        /// The output type returned by methods
+        type Output<'out>
+        where
+            Self: 'out,
+            Data: 'out;
+
+        /// Truth that `self` is a valid index for `vectors`
+        fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool;
+
+        /// Perform unchecked indexing
+        ///
+        /// # Safety
+        ///
+        /// `self` must be a valid index for `vectors` (see is_valid_index)
+        unsafe fn get_unchecked(self, vectors: &mut Vectors<V, Data>) -> Self::Output<'_>;
+    }
+
+    unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for usize {
+        type Output<'out> = Data::ElementRef<'out> where Self: 'out, Data: 'out;
+
+        #[inline(always)]
+        fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
+            *self < vectors.len()
+        }
+
+        #[inline(always)]
+        unsafe fn get_unchecked(self, vectors: &mut Vectors<V, Data>) -> Self::Output<'_> {
+            unsafe { vectors.data.get_unchecked(self, self == vectors.last_idx()) }
+        }
+    }
+
+    unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeFull {
+        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+        #[inline(always)]
+        fn is_valid_index(&self, _vectors: &Vectors<V, Data>) -> bool {
+            true
+        }
+
+        #[inline(always)]
+        unsafe fn get_unchecked(self, vectors: &mut Vectors<V, Data>) -> Self::Output<'_> {
+            vectors.as_slice()
+        }
+    }
+
+    unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeFrom<usize> {
+        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+        #[inline(always)]
+        fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
+            self.start < vectors.len()
+        }
+
+        #[inline(always)]
+        unsafe fn get_unchecked(self, vectors: &mut Vectors<V, Data>) -> Self::Output<'_> {
+            unsafe { vectors.as_slice().split_at_unchecked(self.start) }.1
+        }
+    }
+
+    unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeTo<usize> {
+        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+        #[inline(always)]
+        fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
+            self.end <= vectors.len()
+        }
+
+        #[inline(always)]
+        unsafe fn get_unchecked(self, vectors: &mut Vectors<V, Data>) -> Self::Output<'_> {
+            unsafe { vectors.as_slice().split_at_unchecked(self.end) }.0
+        }
+    }
+
+    unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for Range<usize> {
+        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+        #[inline(always)]
+        fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
+            if self.start < self.end {
+                self.start < vectors.len() && self.end <= vectors.len()
+            } else {
+                true
+            }
+        }
+
+        #[inline(always)]
+        unsafe fn get_unchecked(self, vectors: &mut Vectors<V, Data>) -> Self::Output<'_> {
+            if self.start < self.end {
+                let after_start = unsafe { vectors.as_slice().split_at_unchecked(self.start) }.1;
+                unsafe { after_start.split_at_unchecked(self.end - self.start) }.0
+            } else {
+                unsafe { vectors.as_slice().split_at_unchecked(0) }.0
+            }
+        }
+    }
+
+    /*TODO: impl<T> SliceIndex<[T]> for (Bound<usize>, Bound<usize>)
+    impl<T> SliceIndex<[T]> for RangeInclusive<usize>
+    impl<T> SliceIndex<[T]> for RangeToInclusive<usize> */
 
     macro_rules! impl_iterator {
         (
@@ -1323,7 +1427,7 @@ pub mod experimental {
     /// Padded scalar data treated as SIMD data
     pub type PaddedVectors<V, Data> = Vectors<V, Data>;
 
-    /// Slice of Vectors
+    /// Slice of a Vectors container
     pub type VectorSlice<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::Slice<'a>>;
 
     // === Step 3: Translate from scalar slices and containers to vector slices ===
