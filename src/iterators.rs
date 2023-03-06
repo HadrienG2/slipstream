@@ -1125,7 +1125,7 @@ pub mod experimental {
         /// Extract a slice containing the entire dataset
         ///
         /// Equivalent to `self.index(..)`
-        pub fn as_slice(&mut self) -> VectorsSlice<'_, V, Data> {
+        pub fn as_slice(&mut self) -> VectorSlice<'_, V, Data> {
             unsafe { Vectors::from_raw_parts(self.data.as_slice(), self.len) }
         }
 
@@ -1142,7 +1142,7 @@ pub mod experimental {
         pub fn split_at(
             &mut self,
             mid: usize,
-        ) -> (VectorsSlice<'_, V, Data>, VectorsSlice<'_, V, Data>) {
+        ) -> (VectorSlice<'_, V, Data>, VectorSlice<'_, V, Data>) {
             assert!(mid <= self.len(), "Split point is out of bounds");
             unsafe { self.split_at_unchecked(mid) }
         }
@@ -1164,7 +1164,7 @@ pub mod experimental {
         pub unsafe fn split_at_unchecked(
             &mut self,
             mid: usize,
-        ) -> (VectorsSlice<'_, V, Data>, VectorsSlice<'_, V, Data>) {
+        ) -> (VectorSlice<'_, V, Data>, VectorSlice<'_, V, Data>) {
             let total_len = self.len();
             let (left_data, right_data) = unsafe { self.data.split_at_unchecked(mid, total_len) };
             let wrap = |data, len| unsafe { Vectors::from_raw_parts(data, len) };
@@ -1320,7 +1320,7 @@ pub mod experimental {
     pub type PaddedVectors<V, Data> = Vectors<V, Data>;
 
     /// Slice of Vectors
-    pub type VectorsSlice<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::Slice<'a>>;
+    pub type VectorSlice<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::Slice<'a>>;
 
     // === Step 3: Translate from scalar slices and containers to vector slices ===
 
