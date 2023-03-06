@@ -1066,6 +1066,8 @@ pub mod experimental {
         //
         // NOTE: We can't implement the real Index trait because it requires
         //       returning a &V that we don't have for padded/unaligned data.
+        // TODO: Generalize to subslices, but without using SliceIndex since
+        //       that's not yet in stable Rust.
         #[inline(always)]
         pub fn index(&mut self, idx: usize) -> Data::ElementRef<'_> {
             self.get(idx).expect("Index is out of range")
@@ -1219,6 +1221,8 @@ pub mod experimental {
                     let result = unsafe { self.vectors.get_unchecked(idx) };
                     unsafe { core::mem::transmute_copy::<Data::ElementRef<'iter>, Data::$elem$(<$lifetime>)?>(&result) }
                 }
+
+                // TODO: Add as_slice()
             }
             //
             impl<$($lifetime,)? V: VectorInfo, Data: VectorizedImpl<V>> Iterator
