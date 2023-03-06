@@ -36,6 +36,7 @@ use crate::Vector;
 pub mod experimental {
     use crate::{inner::Repr, vector::align::Align, Vector};
     use core::{
+        borrow::{Borrow, BorrowMut},
         iter::FusedIterator,
         marker::PhantomData,
         mem::MaybeUninit,
@@ -197,7 +198,8 @@ pub mod experimental {
             Self: 'result;
 
         /// Slice view of this dataset
-        type Slice<'result>: Vectorized<V> + VectorizedSliceImpl<V>
+        type Slice<'result>: Vectorized<V, Element = Self::ElementRef<'result>>
+            + VectorizedSliceImpl<V>
         where
             Self: 'result;
 
@@ -229,11 +231,15 @@ pub mod experimental {
     /// Unsafe code may rely on the correctness of implementations of this trait
     /// and the higher-level `Vectorized` trait as part of their safety proofs.
     ///
-    /// The safety preconditions on `Vectorized` are that `OwnedElement` should
+    /// The safety preconditions on `Vectorized` are that `Element` should
     /// not outlive `Self`, and that it should be safe to transmute `ElementRef`
     /// to `Element` in scenarios where either `Element` is `Copy` or the
     /// transmute is abstracted in such a way that the user cannot abuse it to
-    /// get two copies of the same element.
+    /// get two copies of the same element. In other words, Element should be
+    /// the maximal-lifetime version of ElementRef.
+    ///
+    /// Further, Slice::ElementRef should be pretty much the same GAT as
+    /// Self::ElementRef, with just a different Self lifetime bound.
     ///
     /// Furthermore, a `Vectorized` impl is only allowed to implement `Copy` if
     /// the underlying element type is `Copy`.
@@ -610,6 +616,18 @@ pub mod experimental {
         target: &'target mut V::Array,
     }
     //
+    impl<V: VectorInfo> Borrow<V> for UnalignedMut<'_, V> {
+        fn borrow(&self) -> &V {
+            &self.vector
+        }
+    }
+    //
+    impl<V: VectorInfo> BorrowMut<V> for UnalignedMut<'_, V> {
+        fn borrow_mut(&mut self) -> &mut V {
+            &mut self.vector
+        }
+    }
+    //
     impl<V: VectorInfo> Deref for UnalignedMut<'_, V> {
         type Target = V;
 
@@ -892,6 +910,18 @@ pub mod experimental {
     pub struct PaddedMut<'target, V: VectorInfo> {
         vector: V,
         target: &'target mut [V::Scalar],
+    }
+    //
+    impl<V: VectorInfo> Borrow<V> for PaddedMut<'_, V> {
+        fn borrow(&self) -> &V {
+            &self.vector
+        }
+    }
+    //
+    impl<V: VectorInfo> BorrowMut<V> for PaddedMut<'_, V> {
+        fn borrow_mut(&mut self) -> &mut V {
+            &mut self.vector
+        }
     }
     //
     impl<V: VectorInfo> Deref for PaddedMut<'_, V> {
