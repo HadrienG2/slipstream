@@ -1068,7 +1068,7 @@ pub mod experimental {
         //       returning a &V that we don't have for padded/unaligned data.
         #[inline(always)]
         pub fn index(&mut self, idx: usize) -> Data::ElementRef<'_> {
-            self.get(idx).expect("Index is out of range 0..len")
+            self.get(idx).expect("Index is out of range")
         }
 
         /// Returns the N-th element of the container
@@ -1143,7 +1143,7 @@ pub mod experimental {
             &mut self,
             mid: usize,
         ) -> (VectorSlice<'_, V, Data>, VectorSlice<'_, V, Data>) {
-            assert!(mid <= self.len(), "Split point is out of bounds");
+            assert!(mid <= self.len(), "Split point is out of range");
             unsafe { self.split_at_unchecked(mid) }
         }
 
