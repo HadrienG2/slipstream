@@ -196,6 +196,11 @@ pub mod experimental {
         where
             Self: 'result;
 
+        /// Slice view of this dataset
+        type Slice<'result>: Vectorized<V> + VectorizedImpl<V>
+        where
+            Self: 'result;
+
         /// Reinterpretation of this data as SIMD data that may not be aligned
         type Unaligned: Vectorized<V> + VectorizedImpl<V>;
 
@@ -247,6 +252,31 @@ pub mod experimental {
         /// - `is_last` must be true if and only if the last element of the
         ///   slice is being accessed.
         unsafe fn get_unchecked(&mut self, idx: usize, is_last: bool) -> Self::ElementRef<'_>;
+
+        /// Turn this data into the equivalent slice
+        ///
+        /// Lifetime-shrinking no-op if Self is already a slice, but turns
+        /// owned data into slices.
+        fn as_slice(&mut self) -> Self::Slice<'_>;
+
+        /// Divides this dataset into two at an index, without doing bounds
+        /// checking, and returns slices targeting the two halves of the dataset
+        ///
+        /// The first slice will contain all indices from `[0, mid)` (excluding
+        /// the index `mid` itself) and the second will contain all indices from
+        /// `mid` to the end of the dataset.
+        ///
+        /// # Safety
+        ///
+        /// - Calling this method with an out-of-bounds index is undefined
+        ///   behavior even if the resulting reference is not used. The caller
+        ///   has to ensure that 0 <= mid <= len.
+        /// - `len` must be the true slice length.
+        unsafe fn split_at_unchecked(
+            &mut self,
+            mid: usize,
+            len: usize,
+        ) -> (Self::Slice<'_>, Self::Slice<'_>);
 
         /// Unsafely cast this data to the equivalent slice or collection of
         /// unaligned `Vector`s
@@ -304,6 +334,7 @@ pub mod experimental {
     unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedData<'target, V> {
         type Element = V;
         type ElementRef<'result> = V where Self: 'result;
+        type Slice<'result> = AlignedData<'result, V> where Self: 'result;
         type Unaligned = Self;
         type Aligned = Self;
     }
@@ -312,6 +343,21 @@ pub mod experimental {
         #[inline(always)]
         unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
             unsafe { *self.get_ptr(idx).as_ref() }
+        }
+
+        #[inline]
+        fn as_slice(&mut self) -> AlignedData<'_, V> {
+            AlignedData(self.0, PhantomData)
+        }
+
+        #[inline]
+        unsafe fn split_at_unchecked(
+            &mut self,
+            mid: usize,
+            _len: usize,
+        ) -> (AlignedData<'_, V>, AlignedData<'_, V>) {
+            let wrap = |ptr| AlignedData(ptr, PhantomData);
+            (wrap(self.0), wrap(self.get_ptr(mid)))
         }
 
         unsafe fn as_unaligned_unchecked(self) -> Self {
@@ -328,6 +374,7 @@ pub mod experimental {
     unsafe impl<V: VectorInfo, const SIZE: usize> Vectorized<V> for [V; SIZE] {
         type Element = V;
         type ElementRef<'result> = V;
+        type Slice<'result> = AlignedData<'result, V>;
         type Unaligned = Self;
         type Aligned = Self;
     }
@@ -336,6 +383,23 @@ pub mod experimental {
         #[inline(always)]
         unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
             unsafe { *<[V]>::get_unchecked(&self[..], idx) }
+        }
+
+        #[inline]
+        fn as_slice(&mut self) -> AlignedData<'_, V> {
+            (&self[..]).into()
+        }
+
+        #[inline]
+        unsafe fn split_at_unchecked(
+            &mut self,
+            mid: usize,
+            _len: usize,
+        ) -> (AlignedData<'_, V>, AlignedData<'_, V>) {
+            // TODO: Use split_at_unchecked once stable
+            let (left, right) = self.split_at(mid);
+            let wrap = |data| AlignedData::from(data);
+            (wrap(left), wrap(right))
         }
 
         unsafe fn as_unaligned_unchecked(self) -> Self {
@@ -369,6 +433,7 @@ pub mod experimental {
     unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedDataMut<'target, V> {
         type Element = &'target mut V;
         type ElementRef<'result> = &'result mut V where Self: 'result;
+        type Slice<'result> = AlignedDataMut<'result, V> where Self: 'result;
         type Unaligned = Self;
         type Aligned = Self;
     }
@@ -377,6 +442,22 @@ pub mod experimental {
         #[inline(always)]
         unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> &mut V {
             unsafe { self.0.get_ptr(idx).as_mut() }
+        }
+
+        #[inline]
+        fn as_slice(&mut self) -> AlignedDataMut<'_, V> {
+            AlignedDataMut(self.0.as_slice(), PhantomData)
+        }
+
+        #[inline]
+        unsafe fn split_at_unchecked(
+            &mut self,
+            mid: usize,
+            len: usize,
+        ) -> (AlignedDataMut<'_, V>, AlignedDataMut<'_, V>) {
+            let (left, right) = self.0.split_at_unchecked(mid, len);
+            let wrap = |inner| AlignedDataMut(inner, PhantomData);
+            (wrap(left), wrap(right))
         }
 
         unsafe fn as_unaligned_unchecked(self) -> Self {
@@ -428,6 +509,7 @@ pub mod experimental {
     unsafe impl<'target, V: VectorInfo> Vectorized<V> for UnalignedData<'target, V> {
         type Element = V;
         type ElementRef<'result> = V where Self: 'result;
+        type Slice<'result> = UnalignedData<'result, V> where Self: 'result;
         type Unaligned = Self;
         type Aligned = AlignedData<'target, V>;
     }
@@ -436,6 +518,21 @@ pub mod experimental {
         #[inline(always)]
         unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
             unsafe { *self.get_ptr(idx).as_ref() }.into()
+        }
+
+        #[inline]
+        fn as_slice(&mut self) -> UnalignedData<'_, V> {
+            UnalignedData(self.0, PhantomData)
+        }
+
+        #[inline]
+        unsafe fn split_at_unchecked(
+            &mut self,
+            mid: usize,
+            _len: usize,
+        ) -> (UnalignedData<'_, V>, UnalignedData<'_, V>) {
+            let wrap = |ptr| UnalignedData(ptr, PhantomData);
+            (wrap(self.0), wrap(self.get_ptr(mid)))
         }
 
         unsafe fn as_unaligned_unchecked(self) -> Self {
@@ -477,6 +574,7 @@ pub mod experimental {
     unsafe impl<'target, V: VectorInfo> Vectorized<V> for UnalignedDataMut<'target, V> {
         type Element = Self::ElementRef<'target>;
         type ElementRef<'result> = UnalignedMut<'result, V> where Self: 'result;
+        type Slice<'result> = UnalignedDataMut<'result, V> where Self: 'result;
         type Unaligned = Self;
         type Aligned = AlignedDataMut<'target, V>;
     }
@@ -487,6 +585,22 @@ pub mod experimental {
             let target = self.0.get_ptr(idx).as_mut();
             let vector = V::from(*target);
             UnalignedMut { vector, target }
+        }
+
+        #[inline]
+        fn as_slice(&mut self) -> UnalignedDataMut<'_, V> {
+            UnalignedDataMut(self.0.as_slice(), PhantomData)
+        }
+
+        #[inline]
+        unsafe fn split_at_unchecked(
+            &mut self,
+            mid: usize,
+            len: usize,
+        ) -> (UnalignedDataMut<'_, V>, UnalignedDataMut<'_, V>) {
+            let (left, right) = self.0.split_at_unchecked(mid, len);
+            let wrap = |inner| UnalignedDataMut(inner, PhantomData);
+            (wrap(left), wrap(right))
         }
 
         unsafe fn as_unaligned_unchecked(self) -> Self {
@@ -594,6 +708,14 @@ pub mod experimental {
             ))
         }
 
+        /// Make an empty slice
+        fn empty() -> Self {
+            Self {
+                vectors: UnalignedData::from(&[][..]),
+                last_vector: MaybeUninit::uninit(),
+            }
+        }
+
         /// Base pointer used by get_unchecked(idx)
         ///
         /// # Safety
@@ -608,6 +730,7 @@ pub mod experimental {
     unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedData<'target, V> {
         type Element = V;
         type ElementRef<'result> = V where Self: 'result;
+        type Slice<'result> = PaddedData<'result, V> where Self: 'result;
         type Unaligned = UnalignedData<'target, V>;
         type Aligned = AlignedData<'target, V>;
     }
@@ -619,6 +742,36 @@ pub mod experimental {
                 unsafe { self.last_vector.assume_init() }
             } else {
                 unsafe { self.vectors.get_unchecked(idx, false) }
+            }
+        }
+
+        #[inline]
+        fn as_slice(&mut self) -> PaddedData<'_, V> {
+            PaddedData {
+                vectors: self.vectors.as_slice(),
+                last_vector: self.last_vector,
+            }
+        }
+
+        #[inline]
+        unsafe fn split_at_unchecked(
+            &mut self,
+            mid: usize,
+            len: usize,
+        ) -> (PaddedData<'_, V>, PaddedData<'_, V>) {
+            if mid < len {
+                let left_last_vector = self.vectors.get_unchecked(mid, mid == len - 1);
+                let (left_vectors, right_vectors) = self.vectors.split_at_unchecked(mid, len);
+                let wrap = |vectors, last_vector| PaddedData {
+                    vectors,
+                    last_vector,
+                };
+                (
+                    wrap(left_vectors, MaybeUninit::new(left_last_vector)),
+                    wrap(right_vectors, self.last_vector),
+                )
+            } else {
+                (self.as_slice(), PaddedData::empty())
             }
         }
 
@@ -666,11 +819,31 @@ pub mod experimental {
                 lifetime: PhantomData,
             })
         }
+
+        /// Make an empty slice
+        fn empty() -> Self {
+            Self {
+                inner: PaddedData::empty(),
+                num_last_elems: 0,
+                lifetime: PhantomData,
+            }
+        }
+
+        /// Number of actually stored scalar elements for a vector whose index
+        /// is in range, knowing if it's the last one or not
+        fn num_elems(&self, is_last: bool) -> usize {
+            if is_last {
+                self.num_last_elems
+            } else {
+                V::LANES
+            }
+        }
     }
     //
     unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedDataMut<'target, V> {
         type Element = PaddedMut<'target, V>;
         type ElementRef<'result> = PaddedMut<'result, V> where Self: 'result;
+        type Slice<'result> = PaddedDataMut<'result, V> where Self: 'result;
         type Unaligned = UnalignedDataMut<'target, V>;
         type Aligned = AlignedDataMut<'target, V>;
     }
@@ -682,8 +855,40 @@ pub mod experimental {
                 vector: self.inner.get_unchecked(idx, is_last),
                 target: core::slice::from_raw_parts_mut(
                     self.inner.get_ptr(idx).cast::<V::Scalar>().as_ptr(),
-                    self.num_last_elems,
+                    self.num_elems(is_last),
                 ),
+            }
+        }
+
+        #[inline]
+        fn as_slice(&mut self) -> PaddedDataMut<'_, V> {
+            PaddedDataMut {
+                inner: self.inner.as_slice(),
+                num_last_elems: self.num_last_elems,
+                lifetime: PhantomData,
+            }
+        }
+
+        #[inline]
+        unsafe fn split_at_unchecked(
+            &mut self,
+            mid: usize,
+            len: usize,
+        ) -> (PaddedDataMut<'_, V>, PaddedDataMut<'_, V>) {
+            if mid < len {
+                let left_num_last_elems = self.num_elems(mid == len - 1);
+                let (left_inner, right_inner) = self.inner.split_at_unchecked(mid, len);
+                let wrap = |inner, num_last_elems| PaddedDataMut {
+                    inner,
+                    num_last_elems,
+                    lifetime: PhantomData,
+                };
+                (
+                    wrap(left_inner, left_num_last_elems),
+                    wrap(right_inner, self.num_last_elems),
+                )
+            } else {
+                (self.as_slice(), PaddedDataMut::empty())
             }
         }
 
@@ -739,6 +944,7 @@ pub mod experimental {
             > Vectorized<V> for ($($t,)*) {
                 type Element = ($($t::Element,)*);
                 type ElementRef<'result> = ($($t::ElementRef<'result>,)*) where Self: 'result;
+                type Slice<'result> = ($($t::Slice<'result>,)*) where Self: 'result;
                 type Unaligned = ($($t::Unaligned,)*);
                 type Aligned = ($($t::Aligned,)*);
             }
@@ -756,7 +962,24 @@ pub mod experimental {
                     is_last: bool
                 ) -> Self::ElementRef<'_> {
                     let ($($t,)*) = self;
-                    unsafe { ($($t.get_unchecked(idx, is_last),)*)  }
+                    unsafe { ($($t.get_unchecked(idx, is_last),)*) }
+                }
+
+                #[inline]
+                fn as_slice(&mut self) -> Self::Slice<'_> {
+                    let ($($t,)*) = self;
+                    ($($t.as_slice(),)*)
+                }
+
+                #[inline]
+                unsafe fn split_at_unchecked(
+                    &mut self,
+                    mid: usize,
+                    len: usize,
+                ) -> (Self::Slice<'_>, Self::Slice<'_>) {
+                    let ($($t,)*) = self;
+                    let ($($t,)*) = unsafe { ($($t.split_at_unchecked(mid, len),)*) };
+                    (($($t.0,)*), ($($t.1,)*))
                 }
 
                 unsafe fn as_unaligned_unchecked(self) -> Self::Unaligned {
@@ -830,7 +1053,13 @@ pub mod experimental {
 
         /// Returns the last element, or None if the container is empty
         pub fn last(&mut self) -> Option<Data::ElementRef<'_>> {
-            self.get(self.len - 1)
+            self.get(self.last_idx())
+        }
+
+        /// Index of the last element
+        #[inline(always)]
+        fn last_idx(&self) -> usize {
+            self.len - 1
         }
 
         /// Like get(), but panic if idx is out of range
@@ -864,7 +1093,7 @@ pub mod experimental {
         //       that's not yet in stable Rust.
         #[inline(always)]
         pub unsafe fn get_unchecked(&mut self, idx: usize) -> Data::ElementRef<'_> {
-            unsafe { self.data.get_unchecked(idx, idx == self.len - 1) }
+            unsafe { self.data.get_unchecked(idx, idx == self.last_idx()) }
         }
 
         /// Returns an iterator over contained elements
@@ -891,7 +1120,58 @@ pub mod experimental {
             })
         }
 
-        // TODO: rchunks(_exact)?, split_at, r?split(_inclusive)?, r?splitn,
+        // TODO: rchunks(_exact)?
+
+        /// Extract a slice containing the entire dataset
+        ///
+        /// Equivalent to `self.index(..)`
+        pub fn as_slice(&mut self) -> VectorsSlice<'_, V, Data> {
+            unsafe { Vectors::from_raw_parts(self.data.as_slice(), self.len) }
+        }
+
+        /// Divides into two slices at an index
+        ///
+        /// The first will contain all indices from `[0, mid)` (excluding the
+        /// index `mid` itself) and the second will contain all indices from
+        /// `[mid, len)` (excluding the index `len` itself).
+        ///
+        /// # Panics
+        ///
+        /// Panics if mid > len
+        #[inline]
+        pub fn split_at(
+            &mut self,
+            mid: usize,
+        ) -> (VectorsSlice<'_, V, Data>, VectorsSlice<'_, V, Data>) {
+            assert!(mid <= self.len(), "Split point is out of bounds");
+            unsafe { self.split_at_unchecked(mid) }
+        }
+
+        /// Divides into two slices at an index, without doing bounds checking
+        ///
+        /// The first will contain all indices from `[0, mid)` (excluding the
+        /// index `mid` itself) and the second will contain all indices from
+        /// `[mid, len)` (excluding the index `len` itself).
+        ///
+        /// For a safe alternative, see [`split_at`](Vectors::split_at).
+        ///
+        /// # Safety
+        ///
+        /// Calling this method with an out-of-bounds index is undefined
+        /// behavior even if the resulting reference is not used. The caller has
+        /// to ensure that 0 <= mid <= self.len().
+        #[inline]
+        pub unsafe fn split_at_unchecked(
+            &mut self,
+            mid: usize,
+        ) -> (VectorsSlice<'_, V, Data>, VectorsSlice<'_, V, Data>) {
+            let total_len = self.len();
+            let (left_data, right_data) = unsafe { self.data.split_at_unchecked(mid, total_len) };
+            let wrap = |data, len| unsafe { Vectors::from_raw_parts(data, len) };
+            (wrap(left_data, mid), wrap(right_data, total_len - mid))
+        }
+
+        // TODO: r?split(_inclusive)?, r?splitn,
         //       contains, (starts|ends)_with,
         //       (sort|select_nth|binary_search)(_unstable)?_by((_cached)?_key)?,
         //       copy_from_slice (optimiser !), partition_point
@@ -1038,6 +1318,9 @@ pub mod experimental {
 
     /// Padded scalar data treated as SIMD data
     pub type PaddedVectors<V, Data> = Vectors<V, Data>;
+
+    /// Slice of Vectors
+    pub type VectorsSlice<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::Slice<'a>>;
 
     // === Step 3: Translate from scalar slices and containers to vector slices ===
 
