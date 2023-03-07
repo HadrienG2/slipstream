@@ -8,19 +8,17 @@
 //! reinterpretation. The high-level API that users invoke to manipulate the
 //! output slice is mostly defined in the `vectors` sibling module.
 
+mod proxies;
+
 use super::{VectorInfo, VectorizeError};
 #[cfg(doc)]
 use crate::{
     vectorize::{Vectorizable, Vectors},
     Vector,
 };
-use core::{
-    borrow::{Borrow, BorrowMut},
-    marker::PhantomData,
-    mem::MaybeUninit,
-    ops::{Deref, DerefMut},
-    ptr::NonNull,
-};
+use core::{marker::PhantomData, mem::MaybeUninit, ptr::NonNull};
+
+pub use proxies::{PaddedMut, UnalignedMut};
 
 /// Outcome of reinterpreting [`Vectorizable`] data reinterpreted as [`Vectors`]
 ///
@@ -470,7 +468,7 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedDataMut<'targ
     unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> UnalignedMut<V> {
         let target = self.0.get_ptr(idx).as_mut();
         let vector = V::from(*target);
-        UnalignedMut { vector, target }
+        UnalignedMut::new(vector, target)
     }
 
     #[inline(always)]
@@ -502,54 +500,6 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for UnalignedDataMut<
         let (left, right) = self.0.split_at_unchecked(mid, len);
         let wrap = |inner| Self(inner, PhantomData);
         (wrap(left), wrap(right))
-    }
-}
-
-/// [`Vector`] mutation proxy for unaligned SIMD data
-///
-/// For mutation from `&mut [Scalar]`, even if the number of elements is a
-/// multiple of the number of vector lanes, we can't provide an `&mut Vector`
-/// as it could be misaligned. So we provide a proxy object that acts as
-/// closely to `&mut Vector` as possible.
-pub struct UnalignedMut<'target, V: VectorInfo> {
-    vector: V,
-    target: &'target mut V::Array,
-}
-//
-impl<V: VectorInfo> Borrow<V> for UnalignedMut<'_, V> {
-    #[inline(always)]
-    fn borrow(&self) -> &V {
-        &self.vector
-    }
-}
-//
-impl<V: VectorInfo> BorrowMut<V> for UnalignedMut<'_, V> {
-    #[inline(always)]
-    fn borrow_mut(&mut self) -> &mut V {
-        &mut self.vector
-    }
-}
-//
-impl<V: VectorInfo> Deref for UnalignedMut<'_, V> {
-    type Target = V;
-
-    #[inline(always)]
-    fn deref(&self) -> &V {
-        &self.vector
-    }
-}
-//
-impl<V: VectorInfo> DerefMut for UnalignedMut<'_, V> {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut V {
-        &mut self.vector
-    }
-}
-//
-impl<V: VectorInfo> Drop for UnalignedMut<'_, V> {
-    #[inline(always)]
-    fn drop(&mut self) {
-        *self.target = self.vector.into()
     }
 }
 
@@ -748,13 +698,13 @@ unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedDataMut<'target, V> 
 unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedDataMut<'target, V> {
     #[inline(always)]
     unsafe fn get_unchecked(&mut self, idx: usize, is_last: bool) -> PaddedMut<V> {
-        PaddedMut {
-            vector: self.inner.get_unchecked(idx, is_last),
-            target: core::slice::from_raw_parts_mut(
+        PaddedMut::new(
+            self.inner.get_unchecked(idx, is_last),
+            core::slice::from_raw_parts_mut(
                 self.inner.get_ptr(idx).cast::<V::Scalar>().as_ptr(),
                 self.num_elems(is_last),
             ),
-        }
+        )
     }
 
     #[inline(always)]
@@ -806,54 +756,6 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for PaddedDataMut<'ta
         } else {
             (self, Self::empty())
         }
-    }
-}
-
-/// [`Vector`] mutation proxy for padded scalar slices
-///
-/// For mutation from `&mut [Scalar]`, we can't provide an `&mut Vector` as it
-/// could be misaligned and out of bounds. So we provide a proxy object
-/// that acts as closely to `&mut Vector` as possible.
-pub struct PaddedMut<'target, V: VectorInfo> {
-    vector: V,
-    target: &'target mut [V::Scalar],
-}
-//
-impl<V: VectorInfo> Borrow<V> for PaddedMut<'_, V> {
-    #[inline(always)]
-    fn borrow(&self) -> &V {
-        &self.vector
-    }
-}
-//
-impl<V: VectorInfo> BorrowMut<V> for PaddedMut<'_, V> {
-    #[inline(always)]
-    fn borrow_mut(&mut self) -> &mut V {
-        &mut self.vector
-    }
-}
-//
-impl<V: VectorInfo> Deref for PaddedMut<'_, V> {
-    type Target = V;
-
-    #[inline(always)]
-    fn deref(&self) -> &V {
-        &self.vector
-    }
-}
-//
-impl<V: VectorInfo> DerefMut for PaddedMut<'_, V> {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut V {
-        &mut self.vector
-    }
-}
-//
-impl<V: VectorInfo> Drop for PaddedMut<'_, V> {
-    #[inline(always)]
-    fn drop(&mut self) {
-        self.target
-            .copy_from_slice(&self.vector.as_ref()[..self.target.len()]);
     }
 }
 
