@@ -301,7 +301,7 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ExactSizeIterator
     #[inline]
     fn len(&self) -> usize {
         if let Some(remainder) = self.remainder.as_ref() {
-            (remainder.len() / self.chunk_size) + (remainder.len() % self.chunk_size == 0) as usize
+            (remainder.len() / self.chunk_size) + (remainder.len() % self.chunk_size != 0) as usize
         } else {
             0
         }
@@ -335,7 +335,7 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ChunksExact<'vectors, V, 
     pub(crate) fn new(vectors: Slice<'vectors, V, Data>, chunk_size: NonZeroUsize) -> Self {
         let total_len = vectors.len();
         let remainder_len = total_len % chunk_size;
-        let (regular_vectors, remainder) = if remainder_len != 0 {
+        let (regular_vectors, remainder) = if remainder_len > 0 {
             unsafe { vectors.split_at_unchecked(total_len - remainder_len) }
         } else {
             (vectors, Slice::<'vectors, V, Data>::empty())
