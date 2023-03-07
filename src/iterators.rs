@@ -377,7 +377,7 @@ pub mod experimental {
         }
 
         #[inline(always)]
-        fn as_slice(&mut self) -> AlignedData<'_, V> {
+        fn as_slice(&mut self) -> AlignedData<V> {
             AlignedData(self.0, PhantomData)
         }
 
@@ -415,7 +415,7 @@ pub mod experimental {
         }
 
         #[inline(always)]
-        fn as_slice(&mut self) -> AlignedData<'_, V> {
+        fn as_slice(&mut self) -> AlignedData<V> {
             (&self[..]).into()
         }
 
@@ -462,7 +462,7 @@ pub mod experimental {
         }
 
         #[inline(always)]
-        fn as_slice(&mut self) -> AlignedDataMut<'_, V> {
+        fn as_slice(&mut self) -> AlignedDataMut<V> {
             AlignedDataMut(self.0.as_slice(), PhantomData)
         }
 
@@ -536,7 +536,7 @@ pub mod experimental {
         }
 
         #[inline(always)]
-        fn as_slice(&mut self) -> UnalignedData<'_, V> {
+        fn as_slice(&mut self) -> UnalignedData<V> {
             UnalignedData(self.0, PhantomData)
         }
 
@@ -594,14 +594,14 @@ pub mod experimental {
     //
     unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedDataMut<'target, V> {
         #[inline(always)]
-        unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> UnalignedMut<'_, V> {
+        unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> UnalignedMut<V> {
             let target = self.0.get_ptr(idx).as_mut();
             let vector = V::from(*target);
             UnalignedMut { vector, target }
         }
 
         #[inline(always)]
-        fn as_slice(&mut self) -> UnalignedDataMut<'_, V> {
+        fn as_slice(&mut self) -> UnalignedDataMut<V> {
             UnalignedDataMut(self.0.as_slice(), PhantomData)
         }
 
@@ -772,7 +772,7 @@ pub mod experimental {
         }
 
         #[inline(always)]
-        fn as_slice(&mut self) -> PaddedData<'_, V> {
+        fn as_slice(&mut self) -> PaddedData<V> {
             PaddedData {
                 vectors: self.vectors.as_slice(),
                 last_vector: self.last_vector,
@@ -887,7 +887,7 @@ pub mod experimental {
         }
 
         #[inline(always)]
-        fn as_slice(&mut self) -> PaddedDataMut<'_, V> {
+        fn as_slice(&mut self) -> PaddedDataMut<V> {
             PaddedDataMut {
                 inner: self.inner.as_slice(),
                 num_last_elems: self.num_last_elems,
@@ -1103,7 +1103,7 @@ pub mod experimental {
         /// Returns the first and all the rest of the elements of the container,
         /// or None if it is empty.
         #[inline(always)]
-        pub fn split_first(&mut self) -> Option<(Data::ElementRef<'_>, VectorSlice<'_, V, Data>)> {
+        pub fn split_first(&mut self) -> Option<(Data::ElementRef<'_>, Slice<V, Data>)> {
             (!self.is_empty()).then(move || {
                 let (head, tail) = unsafe { self.as_slice().split_at_unchecked(1) };
                 (head.into_iter().next().unwrap(), tail)
@@ -1113,7 +1113,7 @@ pub mod experimental {
         /// Returns the last and all the rest of the elements of the container,
         /// or None if it is empty.
         #[inline(always)]
-        pub fn split_last(&mut self) -> Option<(Data::ElementRef<'_>, VectorSlice<'_, V, Data>)> {
+        pub fn split_last(&mut self) -> Option<(Data::ElementRef<'_>, Slice<V, Data>)> {
             (!self.is_empty()).then(move || {
                 let last = self.last_idx();
                 let (head, tail) = unsafe { self.as_slice().split_at_unchecked(last) };
@@ -1186,7 +1186,7 @@ pub mod experimental {
 
         /// Returns an iterator over contained elements
         #[inline]
-        pub fn iter(&mut self) -> VectorsIter<V, Data> {
+        pub fn iter(&mut self) -> Iter<V, Data> {
             <&mut Self>::into_iter(self)
         }
 
@@ -1216,7 +1216,7 @@ pub mod experimental {
         ///
         /// Equivalent to `self.index(..)`
         #[inline]
-        pub fn as_slice(&mut self) -> VectorSlice<'_, V, Data> {
+        pub fn as_slice(&mut self) -> Slice<V, Data> {
             unsafe { Vectors::from_raw_parts(self.data.as_slice(), self.len) }
         }
 
@@ -1310,7 +1310,7 @@ pub mod experimental {
     }
 
     unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeFull {
-        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+        type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
 
         #[inline]
         fn is_valid_index(&self, _vectors: &Vectors<V, Data>) -> bool {
@@ -1324,7 +1324,7 @@ pub mod experimental {
     }
 
     unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeFrom<usize> {
-        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+        type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
 
         #[inline]
         fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
@@ -1338,7 +1338,7 @@ pub mod experimental {
     }
 
     unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeTo<usize> {
-        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+        type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
 
         #[inline]
         fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
@@ -1352,7 +1352,7 @@ pub mod experimental {
     }
 
     unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for Range<usize> {
-        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+        type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
 
         #[inline]
         fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
@@ -1375,7 +1375,7 @@ pub mod experimental {
     }
 
     unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeInclusive<usize> {
-        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+        type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
 
         #[inline]
         fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
@@ -1401,7 +1401,7 @@ pub mod experimental {
     unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data>
         for RangeToInclusive<usize>
     {
-        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+        type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
 
         #[inline]
         fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
@@ -1417,7 +1417,7 @@ pub mod experimental {
     unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data>
         for (Bound<usize>, Bound<usize>)
     {
-        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+        type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
 
         #[inline]
         fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
@@ -1509,7 +1509,7 @@ pub mod experimental {
                     /// To avoid creating &mut [T] references that alias, this
                     /// is forced to consume the iterator
                     #[inline]
-                    pub fn into_slice(self) -> VectorSlice<$lifetime, V, Data> {
+                    pub fn into_slice(self) -> Slice<$lifetime, V, Data> {
                         unsafe { self.vectors.get_unchecked(self.start..self.end) }
                     }
                 )?
@@ -1520,7 +1520,7 @@ pub mod experimental {
                 /// returned slice borrows its lifetime from the iterator the
                 /// method is applied on.
                 #[inline]
-                pub fn as_slice(&mut self) -> VectorSlice<'_, V, Data> {
+                pub fn as_slice(&mut self) -> Slice<V, Data> {
                     unsafe { self.vectors.get_unchecked(self.start..self.end) }
                 }
             }
@@ -1608,12 +1608,15 @@ pub mod experimental {
     }
     impl_iterator!(
         /// Borrowing iterator over Vectors' elements
-        (VectorsIter, Data::ElementRef<'vectors>)
+        (Iter, Data::ElementRef<'vectors>)
     );
     impl_iterator!(
         /// Owned iterator over Vectors' elements
-        (VectorsIntoIter, Data::Element)
+        (IntoIter, Data::Element)
     );
+
+    /// Slice of a Vectors container
+    pub type Slice<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::Slice<'a>>;
 
     /// Aligned SIMD data
     pub type AlignedVectors<V, Data> = Vectors<V, <Data as Vectorized<V>>::Aligned>;
@@ -1623,9 +1626,6 @@ pub mod experimental {
 
     /// Padded scalar data treated as SIMD data
     pub type PaddedVectors<V, Data> = Vectors<V, Data>;
-
-    /// Slice of a Vectors container
-    pub type VectorSlice<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::Slice<'a>>;
 
     // === Step 3: Translate from scalar slices and containers to vector slices ===
 
