@@ -1,7 +1,7 @@
 //! Iteration over `Vectors`
 
 use crate::vectorize::{data::VectorizedImpl, Slice, VectorInfo, Vectors};
-use core::{iter::FusedIterator, num::NonZeroUsize};
+use core::{hint::unreachable_unchecked, iter::FusedIterator, num::NonZeroUsize};
 
 // IntoIterator impls for Vectors and &mut Vectors
 macro_rules! impl_iterator {
@@ -173,7 +173,7 @@ impl_iterator!(
 /// When the dataset length is not evenly divided by the chunk size, the last
 /// slice of the iteration will be the remainder.
 ///
-/// This struct is created by [`Vectors::chunks()`]
+/// This struct is created by [`Vectors::chunks()`].
 pub struct Chunks<'vectors, V: VectorInfo, Data: VectorizedImpl<V> + 'vectors> {
     remainder: Option<Slice<'vectors, V, Data>>,
     chunk_size: NonZeroUsize,
@@ -313,6 +313,133 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> FusedIterator for Chunks<
 #[cfg(feature = "iterator_ilp")]
 unsafe impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> iterator_ilp::TrustedLowerBound
     for Chunks<'vectors, V, Data>
+{
+}
+
+/// An iterator over [`Vectors`] in (non-overlapping) chunks (`chunk_size`
+/// elements at a time), starting at the beginning of the dataset
+///
+/// When the dataset length is not evenly divided by the chunk size, the last
+/// up to `chunk_size-1` elements will be omitted but can be retrieved from the
+/// iterator using the `into_remainder()` function.
+///
+/// This struct is created by [`Vectors::chunks_exact()`].
+pub struct ChunksExact<'vectors, V: VectorInfo, Data: VectorizedImpl<V> + 'vectors> {
+    regular: Chunks<'vectors, V, Data>,
+    remainder: Slice<'vectors, V, Data>,
+}
+//
+impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ChunksExact<'vectors, V, Data> {
+    /// Set up an exact-size chunks iterator
+    #[inline]
+    pub(crate) fn new(vectors: Slice<'vectors, V, Data>, chunk_size: NonZeroUsize) -> Self {
+        let total_len = vectors.len();
+        let remainder_len = total_len % chunk_size;
+        let (regular_vectors, remainder) = if remainder_len != 0 {
+            unsafe { vectors.split_at_unchecked(total_len - remainder_len) }
+        } else {
+            (vectors, Slice::<'vectors, V, Data>::empty())
+        };
+        Self {
+            regular: Chunks::new(regular_vectors, chunk_size),
+            remainder,
+        }
+    }
+
+    /// Returns the remainder of the original dataset that is not going to be
+    /// returned by the iterator. The returned slice has at most `chunk_size-1`
+    /// elements.
+    #[inline]
+    pub fn into_remainder(self) -> Slice<'vectors, V, Data> {
+        self.remainder
+    }
+
+    /// Assert that any chunk returned by this iterator has the expected size
+    ///
+    /// # Safety
+    ///
+    /// The chunk must originate from `self.regular`, without further tampering
+    #[inline(always)]
+    unsafe fn assume_exact(
+        &self,
+        item: Option<<Self as Iterator>::Item>,
+    ) -> Option<<Self as Iterator>::Item> {
+        match item {
+            Some(item) if item.len() == self.regular.chunk_size() => Some(item),
+            None => None,
+            _ => unsafe { unreachable_unchecked() },
+        }
+    }
+}
+//
+impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Iterator for ChunksExact<'vectors, V, Data> {
+    type Item = Slice<'vectors, V, Data>;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        let result = self.regular.next();
+        unsafe { self.assume_exact(result) }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len(), Some(self.len()))
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        self.len()
+    }
+
+    #[inline]
+    fn last(mut self) -> Option<Self::Item> {
+        self.next_back()
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        let result = self.regular.nth(n);
+        unsafe { self.assume_exact(result) }
+    }
+}
+//
+impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> DoubleEndedIterator
+    for ChunksExact<'vectors, V, Data>
+{
+    #[inline(always)]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let result = self.regular.next_back();
+        unsafe { self.assume_exact(result) }
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        let result = self.regular.nth_back(n);
+        unsafe { self.assume_exact(result) }
+    }
+}
+//
+impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ExactSizeIterator
+    for ChunksExact<'vectors, V, Data>
+{
+    #[inline]
+    fn len(&self) -> usize {
+        if let Some(remainder) = self.regular.remainder.as_ref() {
+            remainder.len() / self.regular.chunk_size()
+        } else {
+            0
+        }
+    }
+}
+//
+impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> FusedIterator
+    for ChunksExact<'vectors, V, Data>
+{
+}
+//
+#[cfg(feature = "iterator_ilp")]
+unsafe impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> iterator_ilp::TrustedLowerBound
+    for ChunksExact<'vectors, V, Data>
 {
 }
 

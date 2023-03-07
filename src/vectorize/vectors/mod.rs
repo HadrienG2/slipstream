@@ -10,7 +10,6 @@ mod index;
 mod iterators;
 
 use super::{
-    array_from_fn,
     data::{VectorizedImpl, VectorizedSliceImpl},
     VectorInfo, Vectorized,
 };
@@ -20,7 +19,7 @@ use core::{marker::PhantomData, num::NonZeroUsize};
 
 // NOTE: Remember to re-export these in the parent vectorize module
 pub use index::VectorIndex;
-pub use iterators::{Chunks, IntoIter, Iter};
+pub use iterators::{Chunks, ChunksExact, IntoIter, Iter};
 
 /// SIMD data
 ///
@@ -170,30 +169,42 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     /// # Panics
     ///
     /// Panics if `chunk_size` is 0.
+    ///
+    /// [`chunks_exact()`]: Vectors::chunks_exact()
+    /// [`rchunks()`]: Vectors::rchunks()
     #[inline]
     pub fn chunks(&mut self, chunk_size: usize) -> Chunks<V, Data> {
         let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
         Chunks::new(self.as_slice(), chunk_size)
     }
 
-    // TODO: chunks_exact : mark inline
-
-    /// Returns an iterator over N elements at a time, starting at the
-    /// beginning of the container
-    // TODO: Make a dedicated Iterator so I can implement DoubleEnded + ExactSize + Fused
-    //       and add a remainder
+    /// Returns an iterator over `chunk_size` elements of the dataset at a time,
+    /// starting at the beginning of the dataset
+    ///
+    /// The chunks are slices and do not overlap. If `chunk_size` does not
+    /// divide the length of the dataset, then the last up to `chunk_size-1`
+    /// elements will be omitted and can be retrieved from the
+    /// [`into_remainder()`](ChunksExact::into_remainder()) function of the
+    /// iterator.
+    ///
+    /// Due to each chunk having exactly `chunk_size` elements, the compiler can
+    /// often optimize the resulting code better than in the case of
+    /// [`chunks()`].
+    ///
+    /// See [`chunks()`] for a variant of this iterator that also returns the
+    /// remainder as a smaller chunk, and [`rchunks_exact()`] for the same
+    /// iterator but starting at the end of the slice.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `chunk_size` is 0.
+    ///
+    /// [`chunks()`]: Vectors::chunks()
+    /// [`rchunks()`]: Vectors::rchunks()
     #[inline]
-    pub fn array_chunks<const N: usize>(
-        &mut self,
-    ) -> impl Iterator<Item = [Data::ElementRef<'_>; N]> {
-        let mut iter = self.iter();
-        core::iter::from_fn(move || {
-            if iter.len() >= N {
-                Some(array_from_fn(|_| iter.next().unwrap()))
-            } else {
-                None
-            }
-        })
+    pub fn chunks_exact(&mut self, chunk_size: usize) -> ChunksExact<V, Data> {
+        let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
+        ChunksExact::new(self.as_slice(), chunk_size)
     }
 
     // TODO: rchunks(_exact)? : mark inline

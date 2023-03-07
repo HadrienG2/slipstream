@@ -60,8 +60,8 @@ use core::mem::MaybeUninit;
 pub use data::{PaddedMut, UnalignedMut, Vectorized};
 pub use vectorizable::{Vectorizable, VectorizeError};
 pub use vectors::{
-    AlignedVectors, Chunks, IntoIter, Iter, PaddedVectors, Slice, UnalignedVectors, VectorIndex,
-    Vectors,
+    AlignedVectors, Chunks, ChunksExact, IntoIter, Iter, PaddedVectors, Slice, UnalignedVectors,
+    VectorIndex, Vectors,
 };
 
 // === COMMON UTILITIES THAT PROBABLY BELONG ELSEWHERE ===
