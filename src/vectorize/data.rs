@@ -154,6 +154,9 @@ pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
 /// and can be split
 #[doc(hidden)]
 pub unsafe trait VectorizedSliceImpl<V: VectorInfo>: VectorizedImpl<V> + Sized {
+    /// Construct an empty slice
+    fn empty() -> Self;
+
     /// Divides this slice into two at an index, without doing bounds
     /// checking, and returns slices targeting the two halves of the dataset
     ///
@@ -242,6 +245,11 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedData<'target, V
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for AlignedData<'target, V> {
+    #[inline(always)]
+    fn empty() -> Self {
+        Self(NonNull::dangling(), PhantomData)
+    }
+
     #[inline(always)]
     unsafe fn split_at_unchecked(self, mid: usize, _len: usize) -> (Self, Self) {
         let wrap = |ptr| Self(ptr, PhantomData);
@@ -332,6 +340,11 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedDataMut<'target
 //
 unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for AlignedDataMut<'target, V> {
     #[inline(always)]
+    fn empty() -> Self {
+        Self(AlignedData::empty(), PhantomData)
+    }
+
+    #[inline(always)]
     unsafe fn split_at_unchecked(self, mid: usize, len: usize) -> (Self, Self) {
         let (left, right) = self.0.split_at_unchecked(mid, len);
         let wrap = |inner| Self(inner, PhantomData);
@@ -414,6 +427,11 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedData<'target,
 //
 unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for UnalignedData<'target, V> {
     #[inline(always)]
+    fn empty() -> Self {
+        Self(NonNull::dangling(), PhantomData)
+    }
+
+    #[inline(always)]
     unsafe fn split_at_unchecked(self, mid: usize, _len: usize) -> (Self, Self) {
         let wrap = |ptr| Self(ptr, PhantomData);
         (wrap(self.0), wrap(self.get_ptr(mid)))
@@ -474,6 +492,11 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedDataMut<'targ
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for UnalignedDataMut<'target, V> {
+    #[inline(always)]
+    fn empty() -> Self {
+        Self(UnalignedData::empty(), PhantomData)
+    }
+
     #[inline(always)]
     unsafe fn split_at_unchecked(self, mid: usize, len: usize) -> (Self, Self) {
         let (left, right) = self.0.split_at_unchecked(mid, len);
@@ -592,15 +615,6 @@ impl<'target, V: VectorInfo> PaddedData<'target, V> {
         ))
     }
 
-    /// Make an empty slice
-    #[inline]
-    fn empty() -> Self {
-        Self {
-            vectors: UnalignedData::from(&[][..]),
-            last_vector: MaybeUninit::uninit(),
-        }
-    }
-
     /// Base pointer used by get_unchecked(idx)
     ///
     /// # Safety
@@ -650,6 +664,14 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedData<'target, V>
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for PaddedData<'target, V> {
+    #[inline(always)]
+    fn empty() -> Self {
+        Self {
+            vectors: UnalignedData::empty(),
+            last_vector: MaybeUninit::uninit(),
+        }
+    }
+
     #[inline(always)]
     unsafe fn split_at_unchecked(mut self, mid: usize, len: usize) -> (Self, Self) {
         if mid < len {
@@ -705,16 +727,6 @@ impl<'target, V: VectorInfo> PaddedDataMut<'target, V> {
         })
     }
 
-    /// Make an empty slice
-    #[inline]
-    fn empty() -> Self {
-        Self {
-            inner: PaddedData::empty(),
-            num_last_elems: 0,
-            lifetime: PhantomData,
-        }
-    }
-
     /// Number of actually stored scalar elements for a vector whose index
     /// is in range, knowing if it's the last one or not
     #[inline(always)]
@@ -768,6 +780,15 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedDataMut<'target,
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for PaddedDataMut<'target, V> {
+    #[inline(always)]
+    fn empty() -> Self {
+        Self {
+            inner: PaddedData::empty(),
+            num_last_elems: 0,
+            lifetime: PhantomData,
+        }
+    }
+
     #[inline(always)]
     unsafe fn split_at_unchecked(self, mid: usize, len: usize) -> (Self, Self) {
         if mid < len {
@@ -894,6 +915,11 @@ macro_rules! impl_vectorized_for_tuple {
             V: VectorInfo
             $(, $t: VectorizedSliceImpl<V> + 'target)*
         > VectorizedSliceImpl<V> for ($($t,)*) {
+            #[inline(always)]
+            fn empty() -> Self {
+                ($($t::empty(),)*)
+            }
+
             #[inline(always)]
             unsafe fn split_at_unchecked(
                 self,

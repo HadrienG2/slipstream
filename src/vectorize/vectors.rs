@@ -210,6 +210,12 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
 // And since owned data cannot be split in general (think arrays), this means
 // that splitting must be specific to slices.
 impl<V: VectorInfo, Data: VectorizedSliceImpl<V>> Vectors<V, Data> {
+    /// Construct an empty slice
+    #[inline]
+    pub fn empty() -> Self {
+        unsafe { Vectors::from_raw_parts(Data::empty(), 0) }
+    }
+
     /// Divides a slice into two at an index
     ///
     /// The first will contain all indices from `[0, mid)` (excluding the
@@ -341,7 +347,7 @@ unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for Ran
             let after_start = unsafe { vectors.as_slice().split_at_unchecked(self.start) }.1;
             unsafe { after_start.split_at_unchecked(self.end - self.start) }.0
         } else {
-            unsafe { vectors.as_slice().split_at_unchecked(0) }.0
+            Self::Output::empty()
         }
     }
 }
