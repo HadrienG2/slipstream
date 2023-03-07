@@ -1639,12 +1639,12 @@ pub mod experimental {
     /// iteration and indexing operations yielding the following types:
     ///
     /// - If built out of a read-only slice or owned container of vectors or
-    ///   scalars, yield owned `Vector`s of data.
+    ///   scalars, it yields owned `Vector`s of data.
     /// - If built out of `&mut [Vector]`, or `&mut [Scalar]` that is assumed
     ///   to be SIMD-aligned (see below), it yields `&mut Vector` references.
     /// - If built out of `&mut [Scalar]` that is not SIMD-aligned, it yields
     ///   a proxy type which can be used like an `&mut Vector` (but cannot
-    ///   literally be `&mut Vector`)
+    ///   literally be `&mut Vector` for alignment and padding reasons)
     /// - If built out of a tuple of the above entities, it yields tuples of the
     ///   aforementioned elements.
     ///
@@ -1654,7 +1654,7 @@ pub mod experimental {
     /// - If starting out of arbitrary data, you can use the [`vectorize_pad()`]
     ///   method to get a SIMD view that does not make any assumption, but
     ///   tends to exhibit poor performance on scalar data as a result.
-    /// - If you know that every scalar array in your dataset has a number of
+    /// - If you know that every scalar slice in your dataset has a number of
     ///   elements that is a multiple of the SIMD vector width, you can use the
     ///   [`vectorize()`] method to get a SIMD view that assumes this (or a
     ///   panic if this is not true), resulting in much better performance.
