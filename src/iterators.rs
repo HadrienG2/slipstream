@@ -1132,7 +1132,7 @@ pub mod experimental {
             self.len - 1
         }
 
-        /// Like get(), but panic if index is out of range
+        /// Like get(), but panics if index is out of range
         ///
         /// # Panics
         ///
@@ -1148,7 +1148,16 @@ pub mod experimental {
             self.get(index).expect("Index is out of range")
         }
 
-        /// Returns the N-th element of the container
+        /// Returns the specified element(s) of the container
+        ///
+        /// This operation accepts either a single `usize` index or a range of
+        /// `usize` indices:
+        ///
+        /// - Given a single index, it emits `Data::ElementRef<'_>`.
+        /// - Given a range of indices, it emits `Data::Slice<'_>`.
+        ///
+        /// If one or more of the specified indices is out of range, None is
+        /// returned.
         #[inline(always)]
         pub fn get<I>(&mut self, index: I) -> Option<<I as VectorIndex<V, Data>>::Output<'_>>
         where
@@ -1157,11 +1166,12 @@ pub mod experimental {
             (index.is_valid_index(self)).then(move || unsafe { self.get_unchecked(index) })
         }
 
-        /// Returns the N-th element of the container without bounds checking
+        /// Returns the specified element(s) of the container without bounds
+        /// checking
         ///
         /// # Safety
         ///
-        /// `idx` must be in range `0..self.len()`
+        /// Indices covered by `index` must be in range `0..self.len()`
         #[inline(always)]
         pub unsafe fn get_unchecked<I>(
             &mut self,
