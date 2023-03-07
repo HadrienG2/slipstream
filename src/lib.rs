@@ -257,6 +257,7 @@ pub mod iterators;
 pub mod mask;
 pub mod types;
 pub mod vector;
+pub mod vectorize;
 
 pub use iterators::Vectorizable;
 pub use mask::Mask;
