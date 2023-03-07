@@ -259,12 +259,10 @@ pub mod types;
 pub mod vector;
 pub mod vectorize;
 
-pub use iterators::experimental::{
-    AlignedVectors, PaddedVectors, UnalignedVectors, VectorInfo, Vectorizable,
-};
 pub use mask::Mask;
 pub use types::*;
 pub use vector::Vector;
+pub use vectorize::{AlignedVectors, PaddedVectors, UnalignedVectors, VectorInfo, Vectorizable};
 
 /// Commonly used imports
 ///
