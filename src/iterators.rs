@@ -37,16 +37,17 @@ use crate::Vector;
 // Proposed code inlining discipline:
 //
 // - If it's a zero-const abstraction meant to be optimized out
-//   (e.g. array_from_fn, UnalignedMut), then it's inline(always).
-// - If it's meant to happen once per element of a dataset, then it's
-//   inline(always).
+//   (e.g. array_from_fn, UnalignedMut, Iterator::next()...), then it should be
+//   marked inline(always).
+// - If it's meant to happen once per element of a dataset, then it should be
+//   marked inline(always).
 // - If it can happen multiple times per dataset but should not normally happen
 //   once per element (e.g. slicing, operations that can be run over slices like
-//   iteration), then it's inline
+//   iteration), then it should be marked inline
 // - If it should happen at most once per dataset, then no particular inlining
 //   directive is used.
 // - If it is unexpected (e.g. indexing failure), then it can be marked cold,
-//   and inline(always) too if optimizer doesn't take the cold hint properly.
+//   and inline(never) too if optimizer doesn't take the cold hint properly.
 pub mod experimental {
     use crate::{inner::Repr, vector::align::Align, Vector};
     use core::{
@@ -1501,7 +1502,27 @@ pub mod experimental {
                     unsafe { core::mem::transmute_copy::<Data::ElementRef<'iter>, Data::$elem$(<$lifetime>)?>(&result) }
                 }
 
-                // TODO: Add as_slice()
+                $(
+                    /// Views the underlying data as a subslice of the original
+                    /// data.
+                    ///
+                    /// To avoid creating &mut [T] references that alias, this
+                    /// is forced to consume the iterator
+                    #[inline]
+                    pub fn into_slice(self) -> VectorSlice<$lifetime, V, Data> {
+                        unsafe { self.vectors.get_unchecked(self.start..self.end) }
+                    }
+                )?
+
+                /// Views the underlying data as a subslice of the original data.
+                ///
+                /// To avoid creating &mut [T] references that alias, the
+                /// returned slice borrows its lifetime from the iterator the
+                /// method is applied on.
+                #[inline]
+                pub fn as_slice(&mut self) -> VectorSlice<'_, V, Data> {
+                    unsafe { self.vectors.get_unchecked(self.start..self.end) }
+                }
             }
             //
             impl<$($lifetime,)? V: VectorInfo, Data: VectorizedImpl<V>> Iterator
