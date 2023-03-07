@@ -40,7 +40,10 @@ pub mod experimental {
         iter::FusedIterator,
         marker::PhantomData,
         mem::MaybeUninit,
-        ops::{Deref, DerefMut, Range, RangeFrom, RangeFull, RangeTo},
+        ops::{
+            Bound, Deref, DerefMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
+            RangeToInclusive,
+        },
         ptr::NonNull,
     };
 
@@ -1246,12 +1249,12 @@ pub mod experimental {
     unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeFull {
         type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
 
-        #[inline(always)]
+        #[inline]
         fn is_valid_index(&self, _vectors: &Vectors<V, Data>) -> bool {
             true
         }
 
-        #[inline(always)]
+        #[inline]
         unsafe fn get_unchecked(self, vectors: &mut Vectors<V, Data>) -> Self::Output<'_> {
             vectors.as_slice()
         }
@@ -1260,12 +1263,12 @@ pub mod experimental {
     unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeFrom<usize> {
         type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
 
-        #[inline(always)]
+        #[inline]
         fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
             self.start < vectors.len()
         }
 
-        #[inline(always)]
+        #[inline]
         unsafe fn get_unchecked(self, vectors: &mut Vectors<V, Data>) -> Self::Output<'_> {
             unsafe { vectors.as_slice().split_at_unchecked(self.start) }.1
         }
@@ -1274,12 +1277,12 @@ pub mod experimental {
     unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeTo<usize> {
         type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
 
-        #[inline(always)]
+        #[inline]
         fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
             self.end <= vectors.len()
         }
 
-        #[inline(always)]
+        #[inline]
         unsafe fn get_unchecked(self, vectors: &mut Vectors<V, Data>) -> Self::Output<'_> {
             unsafe { vectors.as_slice().split_at_unchecked(self.end) }.0
         }
@@ -1288,7 +1291,7 @@ pub mod experimental {
     unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for Range<usize> {
         type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
 
-        #[inline(always)]
+        #[inline]
         fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
             if self.start < self.end {
                 self.start < vectors.len() && self.end <= vectors.len()
@@ -1297,7 +1300,7 @@ pub mod experimental {
             }
         }
 
-        #[inline(always)]
+        #[inline]
         unsafe fn get_unchecked(self, vectors: &mut Vectors<V, Data>) -> Self::Output<'_> {
             if self.start < self.end {
                 let after_start = unsafe { vectors.as_slice().split_at_unchecked(self.start) }.1;
@@ -1308,9 +1311,89 @@ pub mod experimental {
         }
     }
 
-    /*TODO: impl<T> SliceIndex<[T]> for (Bound<usize>, Bound<usize>)
-    impl<T> SliceIndex<[T]> for RangeInclusive<usize>
-    impl<T> SliceIndex<[T]> for RangeToInclusive<usize> */
+    unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeInclusive<usize> {
+        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+        #[inline]
+        fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
+            let (&start, &end) = (self.start(), self.end());
+            if end == usize::MAX {
+                false
+            } else {
+                (start..end + 1).is_valid_index(vectors)
+            }
+        }
+
+        #[inline]
+        unsafe fn get_unchecked(self, vectors: &mut Vectors<V, Data>) -> Self::Output<'_> {
+            let (&start, &end) = (self.start(), self.end());
+            if end == usize::MAX {
+                core::hint::unreachable_unchecked()
+            } else {
+                (start..end + 1).get_unchecked(vectors)
+            }
+        }
+    }
+
+    unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data>
+        for RangeToInclusive<usize>
+    {
+        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+        #[inline]
+        fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
+            (0..=self.end).is_valid_index(vectors)
+        }
+
+        #[inline]
+        unsafe fn get_unchecked(self, vectors: &mut Vectors<V, Data>) -> Self::Output<'_> {
+            (0..=self.end).get_unchecked(vectors)
+        }
+    }
+
+    unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data>
+        for (Bound<usize>, Bound<usize>)
+    {
+        type Output<'out> = VectorSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+        #[inline]
+        fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
+            let (lower_excluded, upper) = match (self.0, self.1) {
+                (Bound::Included(s), Bound::Included(e)) => return (s..=e).is_valid_index(vectors),
+                (Bound::Included(s), Bound::Excluded(e)) => return (s..e).is_valid_index(vectors),
+                (Bound::Included(s), Bound::Unbounded) => return (s..).is_valid_index(vectors),
+                (Bound::Unbounded, Bound::Included(e)) => return (..=e).is_valid_index(vectors),
+                (Bound::Unbounded, Bound::Excluded(e)) => return (..e).is_valid_index(vectors),
+                (Bound::Unbounded, Bound::Unbounded) => return (..).is_valid_index(vectors),
+                (Bound::Excluded(s), upper) => (s, upper),
+            };
+            let lower_included = if lower_excluded == usize::MAX {
+                return false;
+            } else {
+                lower_excluded + 1
+            };
+            (Bound::Included(lower_included), upper).is_valid_index(vectors)
+        }
+
+        #[inline]
+        unsafe fn get_unchecked(self, vectors: &mut Vectors<V, Data>) -> Self::Output<'_> {
+            let (lower_excluded, upper) = match (self.0, self.1) {
+                (Bound::Included(s), Bound::Included(e)) => return (s..=e).get_unchecked(vectors),
+                (Bound::Included(s), Bound::Excluded(e)) => return (s..e).get_unchecked(vectors),
+                (Bound::Included(s), Bound::Unbounded) => return (s..).get_unchecked(vectors),
+                (Bound::Unbounded, Bound::Included(e)) => return (..=e).get_unchecked(vectors),
+                (Bound::Unbounded, Bound::Excluded(e)) => return (..e).get_unchecked(vectors),
+                (Bound::Unbounded, Bound::Unbounded) => return (..).get_unchecked(vectors),
+                (Bound::Excluded(s), upper) => (s, upper),
+            };
+            let lower_included = if lower_excluded == usize::MAX {
+                core::hint::unreachable_unchecked()
+            } else {
+                lower_excluded + 1
+            };
+            (Bound::Included(lower_included), upper).get_unchecked(vectors)
+        }
+    }
 
     macro_rules! impl_iterator {
         (
