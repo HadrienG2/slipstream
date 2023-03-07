@@ -3,10 +3,7 @@
 
 use crate::vectorize::VectorInfo;
 #[cfg(doc)]
-use crate::{
-    vectorize::{Vectorizable, Vectors},
-    Vector,
-};
+use crate::{vectorize::Vectorizable, Vector};
 use core::{
     borrow::{Borrow, BorrowMut},
     ops::{Deref, DerefMut},
@@ -76,8 +73,8 @@ impl<V: VectorInfo> Drop for UnalignedMut<'_, V> {
 /// that acts as closely to `&mut Vector` as possible.
 ///
 /// Trailing elements that do not match actual scalar data are initialized with
-/// the padding value that was specified to [`Vectorizable::vectorize_pad`] and
-/// will be discarded on `Drop`.
+/// the padding value that was specified to [`Vectorizable::vectorize_pad()`]
+/// and will be discarded on `Drop`.
 pub struct PaddedMut<'target, V: VectorInfo> {
     vector: V,
     target: &'target mut [V::Scalar],
