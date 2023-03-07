@@ -43,7 +43,6 @@ pub mod experimental {
         ops::{Deref, DerefMut, Range, RangeFrom, RangeFull, RangeTo},
         ptr::NonNull,
     };
-    use iterator_ilp::TrustedLowerBound;
 
     // === Step 0: General utilities that probably belong elsewhere ===
 
@@ -1433,7 +1432,8 @@ pub mod experimental {
             {
             }
             //
-            unsafe impl<$($lifetime,)? V: VectorInfo, Data: VectorizedImpl<V>> TrustedLowerBound
+            #[cfg(feature = "iterator_ilp")]
+            unsafe impl<$($lifetime,)? V: VectorInfo, Data: VectorizedImpl<V>> iterator_ilp::TrustedLowerBound
                 for $name<$($lifetime,)? V, Data>
             {
             }
