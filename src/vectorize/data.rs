@@ -9,6 +9,11 @@
 //! output slice is mostly defined in the `vectors` sibling module.
 
 use super::{VectorInfo, VectorizeError};
+#[cfg(doc)]
+use crate::{
+    vectorize::{Vectorizable, Vectors},
+    Vector,
+};
 use core::{
     borrow::{Borrow, BorrowMut},
     marker::PhantomData,
@@ -17,16 +22,16 @@ use core::{
     ptr::NonNull,
 };
 
-/// Vectorizable data reinterpreted as a slice of `Vector`s
+/// Outcome of reinterpreting [`Vectorizable`] data reinterpreted as [`Vectors`]
 ///
-/// This trait tells you what types you can expect out of the implementation
-/// of `Vectorizable` and the `Vectors` collection that it emits.
+/// This trait tells you what types you can expect out of the [`Vectors`]
+/// collection that is emitted by the [`Vectorizable`] trait.
 ///
-/// To recapitulate the basic rules here:
+/// To recapitulate the basic rules concerning [`Element`](Self::Element) are:
 ///
-/// - For all supported types T, a `Vectors` collection built out of `&[T]`
-///   or a shared reference to a collection of T has iterators and getters
-///   that emit owned `Vector` values.
+/// - For all supported types T, a [`Vectors`] collection built out of `&[T]` or
+///   a collection of T has iterators and getters that emit owned [`Vector`]
+///   values.
 /// - If built out of `&mut [Vector]`, or out of `&mut [Scalar]` with an
 ///   assertion that the data has optimal SIMD layout
 ///   (see [`Vectorizable::vectorize_aligned()`]), it emits `&mut Vector`.
@@ -42,24 +47,28 @@ use core::{
 /// implementation detail of this crate, therefore this trait should not
 /// be implemented outside of this crate.
 pub unsafe trait Vectorized<V: VectorInfo>: Sized {
-    /// Owned element of the output `Vectors` collection
+    /// Owned element of the output [`Vectors`] collection
+    ///
+    /// Yielded by the `IntoIterator` impl that consumes the collection.
     type Element: Sized;
 
-    /// Borrowed element of the output `Vectors` collection
+    /// Borrowed element of the output [`Vectors`] collection
+    ///
+    /// Returned by methods that take `&mut Vectors` and yield individual
+    /// [`Vector`] or `&mut Vector` elements.
+    ///
+    /// Will always be [`Self::Element`] with a reduced lifetime, but this
+    /// constraint cannot be expressed in current Rust.
     type ElementRef<'result>: Sized
     where
         Self: 'result;
 
     /// Slice of this dataset
+    ///
+    /// Returned by methods that let you borrow a subset of `Vectors`.
     type Slice<'result>: Vectorized<V, Element = Self::ElementRef<'result>> + VectorizedSliceImpl<V>
     where
         Self: 'result;
-
-    /// Reinterpretation of this data as SIMD data that may not be aligned
-    type Unaligned: Vectorized<V> + VectorizedImpl<V>;
-
-    /// Reinterpretation of this data as SIMD data with optimal layout
-    type Aligned: Vectorized<V> + VectorizedImpl<V>;
 }
 
 /// Entity that can be treated as the base pointer of an &[Vector] or
@@ -87,13 +96,13 @@ pub unsafe trait Vectorized<V: VectorInfo>: Sized {
 /// not outlive `Self`, and that it should be safe to transmute `ElementRef`
 /// to `Element` in scenarios where either `Element` is `Copy` or the
 /// transmute is abstracted in such a way that the user cannot abuse it to
-/// get two copies of the same element. In other words, Element should be
-/// the maximal-lifetime version of ElementRef.
+/// get two copies of the same element. In other words, `Element` should be
+/// the maximal-lifetime version of `ElementRef`.
 ///
-/// Further, Slice::ElementRef should be pretty much the same GAT as
-/// Self::ElementRef, with just a different Self lifetime bound.
+/// Further, `Slice::ElementRef` should be pretty much the same GAT as
+/// `Self::ElementRef`, with just a different `Self` lifetime bound.
 ///
-/// Furthermore, a `Vectorized` impl is only allowed to implement `Copy` if
+/// Finally, a `Vectorized` impl is only allowed to implement `Copy` if
 /// the underlying element type is `Copy`.
 #[doc(hidden)]
 pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
@@ -117,6 +126,9 @@ pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
     /// owned data into slices.
     fn as_slice(&mut self) -> Self::Slice<'_>;
 
+    /// Reinterpretation of this data as SIMD data that may not be aligned
+    type Unaligned: Vectorized<V> + VectorizedImpl<V>;
+
     /// Unsafely cast this data to the equivalent slice or collection of
     /// unaligned `Vector`s
     ///
@@ -125,6 +137,9 @@ pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
     /// The underlying scalar data must have a number of elements that is
     /// a multiple of `V::LANES`.
     unsafe fn as_unaligned_unchecked(self) -> Self::Unaligned;
+
+    /// Reinterpretation of this data as SIMD data with optimal layout
+    type Aligned: Vectorized<V> + VectorizedImpl<V>;
 
     /// Unsafely cast this data to the equivalent slice or collection of Vector.
     ///
@@ -200,8 +215,6 @@ unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedData<'target, V> {
     type Element = V;
     type ElementRef<'result> = V where Self: 'result;
     type Slice<'result> = AlignedData<'result, V> where Self: 'result;
-    type Unaligned = Self;
-    type Aligned = Self;
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedData<'target, V> {
@@ -215,9 +228,13 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedData<'target, V
         AlignedData(self.0, PhantomData)
     }
 
+    type Unaligned = Self;
+
     unsafe fn as_unaligned_unchecked(self) -> Self {
         self
     }
+
+    type Aligned = Self;
 
     unsafe fn as_aligned_unchecked(self) -> Self {
         self
@@ -238,8 +255,6 @@ unsafe impl<V: VectorInfo, const SIZE: usize> Vectorized<V> for [V; SIZE] {
     type Element = V;
     type ElementRef<'result> = V;
     type Slice<'result> = AlignedData<'result, V>;
-    type Unaligned = Self;
-    type Aligned = Self;
 }
 //
 unsafe impl<V: VectorInfo, const SIZE: usize> VectorizedImpl<V> for [V; SIZE] {
@@ -253,9 +268,13 @@ unsafe impl<V: VectorInfo, const SIZE: usize> VectorizedImpl<V> for [V; SIZE] {
         (&self[..]).into()
     }
 
+    type Unaligned = Self;
+
     unsafe fn as_unaligned_unchecked(self) -> Self {
         self
     }
+
+    type Aligned = Self;
 
     unsafe fn as_aligned_unchecked(self) -> Self {
         self
@@ -285,8 +304,6 @@ unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedDataMut<'target, V>
     type Element = &'target mut V;
     type ElementRef<'result> = &'result mut V where Self: 'result;
     type Slice<'result> = AlignedDataMut<'result, V> where Self: 'result;
-    type Unaligned = Self;
-    type Aligned = Self;
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedDataMut<'target, V> {
@@ -300,9 +317,13 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedDataMut<'target
         AlignedDataMut(self.0.as_slice(), PhantomData)
     }
 
+    type Unaligned = Self;
+
     unsafe fn as_unaligned_unchecked(self) -> Self {
         self
     }
+
+    type Aligned = Self;
 
     unsafe fn as_aligned_unchecked(self) -> Self {
         self
@@ -359,8 +380,6 @@ unsafe impl<'target, V: VectorInfo> Vectorized<V> for UnalignedData<'target, V> 
     type Element = V;
     type ElementRef<'result> = V where Self: 'result;
     type Slice<'result> = UnalignedData<'result, V> where Self: 'result;
-    type Unaligned = Self;
-    type Aligned = AlignedData<'target, V>;
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedData<'target, V> {
@@ -374,9 +393,13 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedData<'target,
         UnalignedData(self.0, PhantomData)
     }
 
+    type Unaligned = Self;
+
     unsafe fn as_unaligned_unchecked(self) -> Self {
         self
     }
+
+    type Aligned = AlignedData<'target, V>;
 
     unsafe fn as_aligned_unchecked(self) -> AlignedData<'target, V> {
         V::assert_overaligned_array();
@@ -422,8 +445,6 @@ unsafe impl<'target, V: VectorInfo> Vectorized<V> for UnalignedDataMut<'target, 
     type Element = Self::ElementRef<'target>;
     type ElementRef<'result> = UnalignedMut<'result, V> where Self: 'result;
     type Slice<'result> = UnalignedDataMut<'result, V> where Self: 'result;
-    type Unaligned = Self;
-    type Aligned = AlignedDataMut<'target, V>;
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedDataMut<'target, V> {
@@ -439,9 +460,13 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedDataMut<'targ
         UnalignedDataMut(self.0.as_slice(), PhantomData)
     }
 
+    type Unaligned = Self;
+
     unsafe fn as_unaligned_unchecked(self) -> Self {
         self
     }
+
+    type Aligned = AlignedDataMut<'target, V>;
 
     unsafe fn as_aligned_unchecked(self) -> AlignedDataMut<'target, V> {
         AlignedDataMut(self.0.as_aligned_unchecked(), PhantomData)
@@ -457,12 +482,12 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for UnalignedDataMut<
     }
 }
 
-/// Vector mutation proxy for unaligned SIMD data
+/// [`Vector`] mutation proxy for unaligned SIMD data
 ///
-/// For mutation from &mut [Scalar], even if the number of elements is a
-/// multiple of the number of vector lanes, we can't provide an &mut Vector
+/// For mutation from `&mut [Scalar]`, even if the number of elements is a
+/// multiple of the number of vector lanes, we can't provide an `&mut Vector`
 /// as it could be misaligned. So we provide a proxy object that acts as
-/// closely to &mut Vector as possible.
+/// closely to `&mut Vector` as possible.
 pub struct UnalignedMut<'target, V: VectorInfo> {
     vector: V,
     target: &'target mut V::Array,
@@ -591,8 +616,6 @@ unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedData<'target, V> {
     type Element = V;
     type ElementRef<'result> = V where Self: 'result;
     type Slice<'result> = PaddedData<'result, V> where Self: 'result;
-    type Unaligned = UnalignedData<'target, V>;
-    type Aligned = AlignedData<'target, V>;
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedData<'target, V> {
@@ -613,9 +636,13 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedData<'target, V>
         }
     }
 
+    type Unaligned = UnalignedData<'target, V>;
+
     unsafe fn as_unaligned_unchecked(self) -> UnalignedData<'target, V> {
         self.vectors
     }
+
+    type Aligned = AlignedData<'target, V>;
 
     unsafe fn as_aligned_unchecked(self) -> AlignedData<'target, V> {
         unsafe { self.vectors.as_aligned_unchecked() }
@@ -704,8 +731,6 @@ unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedDataMut<'target, V> 
     type Element = PaddedMut<'target, V>;
     type ElementRef<'result> = PaddedMut<'result, V> where Self: 'result;
     type Slice<'result> = PaddedDataMut<'result, V> where Self: 'result;
-    type Unaligned = UnalignedDataMut<'target, V>;
-    type Aligned = AlignedDataMut<'target, V>;
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedDataMut<'target, V> {
@@ -729,9 +754,13 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedDataMut<'target,
         }
     }
 
+    type Unaligned = UnalignedDataMut<'target, V>;
+
     unsafe fn as_unaligned_unchecked(self) -> UnalignedDataMut<'target, V> {
         unsafe { UnalignedDataMut(self.inner.as_unaligned_unchecked(), PhantomData) }
     }
+
+    type Aligned = AlignedDataMut<'target, V>;
 
     unsafe fn as_aligned_unchecked(self) -> AlignedDataMut<'target, V> {
         unsafe { AlignedDataMut(self.inner.as_aligned_unchecked(), PhantomData) }
@@ -759,11 +788,11 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for PaddedDataMut<'ta
     }
 }
 
-/// Vector mutation proxy for padded scalar slices
+/// [`Vector`] mutation proxy for padded scalar slices
 ///
-/// For mutation from &mut [Scalar], we can't provide an &mut Vector as it
+/// For mutation from `&mut [Scalar]`, we can't provide an `&mut Vector` as it
 /// could be misaligned and out of bounds. So we provide a proxy object
-/// that acts as closely to &mut Vector as possible.
+/// that acts as closely to `&mut Vector` as possible.
 pub struct PaddedMut<'target, V: VectorInfo> {
     vector: V,
     target: &'target mut [V::Scalar],
@@ -820,8 +849,6 @@ macro_rules! impl_vectorized_for_tuple {
             type Element = ($($t::Element,)*);
             type ElementRef<'result> = ($($t::ElementRef<'result>,)*) where Self: 'result;
             type Slice<'result> = ($($t::Slice<'result>,)*) where Self: 'result;
-            type Unaligned = ($($t::Unaligned,)*);
-            type Aligned = ($($t::Aligned,)*);
         }
 
         #[allow(non_snake_case)]
@@ -846,10 +873,14 @@ macro_rules! impl_vectorized_for_tuple {
                 ($($t.as_slice(),)*)
             }
 
+            type Unaligned = ($($t::Unaligned,)*);
+
             unsafe fn as_unaligned_unchecked(self) -> Self::Unaligned {
                 let ($($t,)*) = self;
                 unsafe { ($($t.as_unaligned_unchecked(),)*) }
             }
+
+            type Aligned = ($($t::Aligned,)*);
 
             unsafe fn as_aligned_unchecked(self) -> Self::Aligned {
                 let ($($t,)*) = self;

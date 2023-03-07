@@ -134,13 +134,12 @@ impl<T, const N: usize> Drop for PartialArray<T, N> {
     }
 }
 
-/// Query the configuration of a Vector type
+/// Query the configuration of the [`Vector`] type
 ///
 /// # Safety
 ///
 /// Users of this trait may rely on the provided information to be correct
 /// for safety.
-//
 pub unsafe trait VectorInfo:
     AsRef<[Self::Scalar]> + Copy + From<Self::Array> + Into<Self::Array> + Sized + 'static
 {
@@ -150,7 +149,7 @@ pub unsafe trait VectorInfo:
     /// Number of vector lanes (commonly called S in generics)
     const LANES: usize;
 
-    /// Equivalent array type (will always be [Self::Scalar; Self::LANES],
+    /// Equivalent array type (will always be `[Self::Scalar; Self::LANES]`,
     /// but Rust does not support asserting this at the moment)
     type Array: Copy + Sized + 'static;
 
@@ -159,6 +158,7 @@ pub unsafe trait VectorInfo:
     /// We hope this would be true, but it's not actually guaranteed by Rust
     /// for non-repr(transparent) types and we rely on it for safety here...
     #[inline(always)]
+    #[doc(hidden)]
     fn assert_overaligned_array() {
         assert_eq!(
             core::mem::size_of::<Self>(),
@@ -166,7 +166,7 @@ pub unsafe trait VectorInfo:
         )
     }
 
-    /// Build from an index -> element mapping
+    /// Build from an index-to-element mapping
     fn from_fn(idx_to_elem: impl FnMut(usize) -> Self::Scalar) -> Self;
 }
 //

@@ -11,19 +11,21 @@ use super::{
     data::{VectorizedImpl, VectorizedSliceImpl},
     VectorInfo, Vectorized,
 };
+#[cfg(doc)]
+use crate::{vectorize::Vectorizable, Vector};
 use core::{
     iter::FusedIterator,
     marker::PhantomData,
     ops::{Bound, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive},
 };
 
-/// Data that can be processed using SIMD
+/// SIMD data
 ///
-/// This container is built using the `Vectorizable` trait.
+/// This container is built using the [`Vectorizable`] trait.
 ///
-/// It behaves conceptually like an array of `Vector` or tuples thereof,
+/// It behaves conceptually like an array of [`Vector`] or tuples thereof,
 /// with iteration and indexing operations yielding the type that is
-/// described in the documentation of `Vectorizable`.
+/// described in the documentation of [`Vectorizable`].
 #[derive(Copy, Clone)]
 pub struct Vectors<V: VectorInfo, Data: VectorizedImpl<V>> {
     data: Data,
@@ -97,7 +99,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
         self.len - 1
     }
 
-    /// Like get(), but panics if index is out of range
+    /// Like [`get()`](Vectors::get()), but panics if index is out of range
     ///
     /// # Panics
     ///
@@ -118,8 +120,8 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     /// This operation accepts either a single `usize` index or a range of
     /// `usize` indices:
     ///
-    /// - Given a single index, it emits `Data::ElementRef<'_>`.
-    /// - Given a range of indices, it emits `Data::Slice<'_>`.
+    /// - Given a single index, it emits [`Data::ElementRef<'_>`](Vectorized::ElementRef).
+    /// - Given a range of indices, it emits [`Data::Slice<'_>`](Vectorized::Slice).
     ///
     /// If one or more of the specified indices is out of range, None is
     /// returned.
@@ -181,10 +183,34 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
         unsafe { Vectors::from_raw_parts(self.data.as_slice(), self.len) }
     }
 
+    // TODO: Figure out inlining discipline for the following
+    // TODO: r?split(_inclusive)?, r?splitn,
+    //       contains, (starts|ends)_with,
+    //       (sort|select_nth|binary_search)(_unstable)?_by((_cached)?_key)?,
+    //       copy_from_slice (optimiser !), partition_point
+}
+//
+/// # Slice-specific methods
+///
+/// These operations are currently only available on slices of [`Vectors`]. You
+/// can extract a slice covering all data within a [`Vectors`] container using
+/// [`Vectors::as_slice()`].
+//
+// --- Internal docs start here ---
+//
+// The reason why these are not provided for owned vectors and have a signature
+// that differs from the equivalent standard slice methods is that in current
+// Rust, it is not possible to express that
+// `for<'a> Data::Slice::Slice<'a> = Data::Slice<'a>`.
+//
+// Without having that assertion, we cannot allow the common convenient pattern
+// of iteratively splitting a slice to generate smaller slices, unless we
+// redefine slice splitting as a consuming operation that returns the same type.
+//
+// And since owned data cannot be split in general (think arrays), this means
+// that splitting must be specific to slices.
+impl<V: VectorInfo, Data: VectorizedSliceImpl<V>> Vectors<V, Data> {
     /// Divides a slice into two at an index
-    ///
-    /// This operation is only available on slices. You can turn a full dataset
-    /// into a slice using `as_slice()`.
     ///
     /// The first will contain all indices from `[0, mid)` (excluding the
     /// index `mid` itself) and the second will contain all indices from
@@ -194,43 +220,31 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     ///
     /// Panics if mid > len
     #[inline]
-    pub fn split_at(self, mid: usize) -> (Self, Self)
-    where
-        Data: VectorizedSliceImpl<V>,
-    {
+    pub fn split_at(self, mid: usize) -> (Self, Self) {
         assert!(mid <= self.len(), "Split point is out of range");
         unsafe { self.split_at_unchecked(mid) }
     }
 
-    /// Like `split_at`, but without bounds checking
+    /// Like [`split_at()`](Vectors::split_at()), but without bounds checking
     ///
     /// # Safety
     ///
     /// Calling this method with an out-of-bounds index is undefined
     /// behavior even if the resulting reference is not used. The caller has
-    /// to ensure that 0 <= mid <= self.len().
+    /// to ensure that `0 <= mid <= self.len()`.
     #[inline(always)]
-    pub unsafe fn split_at_unchecked(self, mid: usize) -> (Self, Self)
-    where
-        Data: VectorizedSliceImpl<V>,
-    {
+    pub unsafe fn split_at_unchecked(self, mid: usize) -> (Self, Self) {
         let total_len = self.len();
         let (left_data, right_data) = unsafe { self.data.split_at_unchecked(mid, total_len) };
         let wrap = |data, len| unsafe { Vectors::from_raw_parts(data, len) };
         (wrap(left_data, mid), wrap(right_data, total_len - mid))
     }
-
-    // TODO: Figure out inlining discipline for the following
-    // TODO: r?split(_inclusive)?, r?splitn,
-    //       contains, (starts|ends)_with,
-    //       (sort|select_nth|binary_search)(_unstable)?_by((_cached)?_key)?,
-    //       copy_from_slice (optimiser !), partition_point
 }
 
-/// A helper trait used for `Vectors` indexing operations
+/// A helper trait used for [`Vectors`] indexing operations
 ///
 /// Analogous to the standard (unstable)
-/// [`SliceIndex`](core::slice::SliceIndex) trait, but for `Vectors`.
+/// [`SliceIndex`](core::slice::SliceIndex) trait, but for [`Vectors`].
 ///
 /// # Safety
 ///
@@ -464,7 +478,7 @@ macro_rules! impl_iterator {
                 /// Views the underlying data as a subslice of the original
                 /// data.
                 ///
-                /// To avoid creating &mut [T] references that alias, this
+                /// To avoid creating `&mut V` references that alias, this
                 /// is forced to consume the iterator
                 #[inline]
                 pub fn into_slice(self) -> Slice<$lifetime, V, Data> {
@@ -474,9 +488,8 @@ macro_rules! impl_iterator {
 
             /// Views the underlying data as a subslice of the original data.
             ///
-            /// To avoid creating &mut [T] references that alias, the
-            /// returned slice borrows its lifetime from the iterator the
-            /// method is applied on.
+            /// To avoid creating `&mut V` references that alias, the
+            /// returned slice borrows its lifetime from the iterator.
             #[inline]
             pub fn as_slice(&mut self) -> Slice<V, Data> {
                 unsafe { self.vectors.get_unchecked(self.start..self.end) }
@@ -565,22 +578,22 @@ macro_rules! impl_iterator {
     }
 }
 impl_iterator!(
-    /// Borrowing iterator over Vectors' elements
+    /// Borrowing iterator over [`Vectors`]' elements
     (Iter, Data::ElementRef<'vectors>)
 );
 impl_iterator!(
-    /// Owned iterator over Vectors' elements
+    /// Consuming iterator of [`Vectors`]' elements
     (IntoIter, Data::Element)
 );
 
-/// Slice of a Vectors container
+/// Slice of [`Vectors`]
 pub type Slice<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::Slice<'a>>;
 
 /// Aligned SIMD data
-pub type AlignedVectors<V, Data> = Vectors<V, <Data as Vectorized<V>>::Aligned>;
+pub type AlignedVectors<V, Data> = Vectors<V, <Data as VectorizedImpl<V>>::Aligned>;
 
 /// Unaligned SIMD data
-pub type UnalignedVectors<V, Data> = Vectors<V, <Data as Vectorized<V>>::Unaligned>;
+pub type UnalignedVectors<V, Data> = Vectors<V, <Data as VectorizedImpl<V>>::Unaligned>;
 
 /// Padded scalar data treated as SIMD data
 pub type PaddedVectors<V, Data> = Vectors<V, Data>;

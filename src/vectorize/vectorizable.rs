@@ -12,26 +12,26 @@ use super::{
 };
 use crate::{inner::Repr, vector::align::Align, Vector};
 
-/// Trait for data that can be processed using SIMD
+/// Data that can be processed using SIMD
 ///
 /// Implemented for slices and containers of vectors and scalars,
 /// as well as for tuples of these entities.
 ///
-/// Provides you with ways to create the `Vectors` collection, which
-/// behaves conceptually like a slice of `Vector` or tuples thereof, with
+/// Provides you with ways to create the [`Vectors`] collection, which
+/// behaves conceptually like a slice of [`Vector`] or tuples thereof, with
 /// iteration and indexing operations yielding the following types:
 ///
 /// - If built out of a read-only slice or owned container of vectors or
-///   scalars, it yields owned `Vector`s of data.
+///   scalars, it yields owned [`Vector`]s of data.
 /// - If built out of `&mut [Vector]`, or `&mut [Scalar]` that is assumed
 ///   to be SIMD-aligned (see below), it yields `&mut Vector` references.
-/// - If built out of `&mut [Scalar]` that is not SIMD-aligned, it yields
-///   a proxy type which can be used like an `&mut Vector` (but cannot
+/// - If built out of `&mut [Scalar]` that is not assumed to SIMD-aligned, it
+///   yields a proxy type which can be used like an `&mut Vector` (but cannot
 ///   literally be `&mut Vector` for alignment and padding reasons)
 /// - If built out of a tuple of the above entities, it yields tuples of the
 ///   aforementioned elements.
 ///
-/// There are three ways to create `Vectors` using this trait depending on
+/// There are three ways to create [`Vectors`] using this trait depending on
 /// what kind of data you're starting from:
 ///
 /// - If starting out of arbitrary data, you can use the [`vectorize_pad()`]
@@ -48,7 +48,7 @@ use crate::{inner::Repr, vector::align::Align, Vector};
 ///
 /// Note that even on hardware architectures like x86 where SIMD alignment
 /// is not a prerequisite for good code generation (and hence you may not
-/// need to call `vectorize_aligned()` for optimal performance), it is
+/// need to call [`vectorize_aligned()`] for optimal performance), it is
 /// always a hardware prerequisite for good computational performance, so
 /// you should aim for it whenever possible!
 ///
@@ -62,30 +62,33 @@ use crate::{inner::Repr, vector::align::Align, Vector};
 pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     /// Vectorized representation of this data
     ///
-    /// You can use the Vectorized trait to query at compile time which type
+    /// You can use the [`Vectorized`] trait to query at compile time which type
     /// of Vectors collections you are going to get and what kind of
     /// elements iterators and getters of this collection will emit.
     ///
-    /// VectorizedImpl is an implementation detail of this crate.
+    /// `VectorizedImpl` is an implementation detail of this crate.
     type Vectorized: Vectorized<V> + VectorizedImpl<V>;
 
     // Required methods
 
-    /// Implementation of the `vectorize()` methods
+    /// Implementation of the vectorization methods
     //
     // --- Internal docs starts here ---
     //
     // The returned building blocks are...
     //
     // - A pointer-like entity for treating the data as a slice of Vector
-    //   (see VectorizedImpl for more information)
+    //   (see [`VectorizedImpl`] for more information)
     // - The number of Vector elements that the emulated slice contains
     //
     // # Errors
     //
-    // - NeedsPadding if padding was needed, but not provided
-    // - InhomogeneousLength if input is (or contains) a tuple and not all
+    // - [`NeedsPadding`] if padding was needed, but not provided
+    // - [`InhomogeneousLength`] if input is (or contains) a tuple and not all
     //   tuple elements yield the same amount of SIMD vectors
+    //
+    // [`NeedsPadding`]: VectorizeError::NeedsPadding
+    // [`InhomogeneousLength`]: VectorizeError::InhomogeneousLength
     fn into_vectorized_parts(
         self,
         padding: Option<V::Scalar>,
@@ -99,9 +102,12 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     /// # Panics
     ///
     /// - If called on a scalar slice whose length is not a multiple of the
-    ///   number of SIMD vector lanes (you need `vectorize_pad()`)
+    ///   number of SIMD vector lanes (consider using [`vectorize_pad()`] if
+    ///   you cannot avoid this)
     /// - If called on a tuple and not all tuple elements yield the same
     ///   amount of SIMD elements.
+    ///
+    /// [`vectorize_pad()`]: Vectorizable::vectorize_pad()
     fn vectorize(self) -> UnalignedVectors<V, Self::Vectorized> {
         let (base, len) = self.into_vectorized_parts(None).unwrap();
         unsafe { Vectors::from_raw_parts(base.as_unaligned_unchecked(), len) }
@@ -136,7 +142,8 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     /// Vector data always passes this check, but scalar data only passes it
     /// if it meets two conditions:
     ///
-    /// - The start of the data is aligned as `std::mem::align_of::<V>()`,
+    /// - The start of the data is aligned as
+    ///   [`core::mem::align_of::<V>()`](core::mem::align_of),
     ///   or the data can be moved around in memory to enforce this.
     /// - The number of inner scalar elements is a multiple of the number
     ///   of SIMD vector lanes of V.
@@ -162,7 +169,7 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     }
 }
 
-/// Error returned by `Vectorizable::into_vectorized_parts`
+/// Error returned by [`Vectorizable::into_vectorized_parts()`]
 #[doc(hidden)]
 #[derive(Debug)]
 pub enum VectorizeError {
@@ -333,10 +340,6 @@ macro_rules! impl_vectorizable_for_tuple {
                         if len != t_len {
                             return Err(VectorizeError::InhomogeneousLength);
                         }
-                        assert_eq!(
-                            t_len, len,
-                            "Tuple elements do not produce the same amount of SIMD vectors"
-                        );
                     } else {
                         len = Some(t_len);
                     }
