@@ -33,6 +33,20 @@ use crate::Vector;
 
 /// FIXME: This is an experiment to see how Vectorize could be extended to be
 ///        more friendly to rustc's optimizer.
+//
+// Proposed code inlining discipline:
+//
+// - If it's a zero-const abstraction meant to be optimized out
+//   (e.g. array_from_fn, UnalignedMut), then it's inline(always).
+// - If it's meant to happen once per element of a dataset, then it's
+//   inline(always).
+// - If it can happen multiple times per dataset but should not normally happen
+//   once per element (e.g. slicing, operations that can be run over slices like
+//   iteration), then it's inline
+// - If it should happen at most once per dataset, then no particular inlining
+//   directive is used.
+// - If it is unexpected (e.g. indexing failure), then it can be marked cold,
+//   and inline(always) too if optimizer doesn't take the cold hint properly.
 pub mod experimental {
     use crate::{inner::Repr, vector::align::Align, Vector};
     use core::{
@@ -109,6 +123,7 @@ pub mod experimental {
     //
     impl<T, const N: usize> Drop for PartialArray<T, N> {
         /// Drop already initialized elements on panic
+        #[inline(always)]
         fn drop(&mut self) {
             let ptr = self.inner.as_mut_ptr().cast::<T>();
             for idx in 0..self.num_initialized {
@@ -619,12 +634,14 @@ pub mod experimental {
     }
     //
     impl<V: VectorInfo> Borrow<V> for UnalignedMut<'_, V> {
+        #[inline(always)]
         fn borrow(&self) -> &V {
             &self.vector
         }
     }
     //
     impl<V: VectorInfo> BorrowMut<V> for UnalignedMut<'_, V> {
+        #[inline(always)]
         fn borrow_mut(&mut self) -> &mut V {
             &mut self.vector
         }
@@ -716,6 +733,7 @@ pub mod experimental {
         }
 
         /// Make an empty slice
+        #[inline]
         fn empty() -> Self {
             Self {
                 vectors: UnalignedData::from(&[][..]),
@@ -826,6 +844,7 @@ pub mod experimental {
         }
 
         /// Make an empty slice
+        #[inline]
         fn empty() -> Self {
             Self {
                 inner: PaddedData::empty(),
@@ -836,6 +855,7 @@ pub mod experimental {
 
         /// Number of actually stored scalar elements for a vector whose index
         /// is in range, knowing if it's the last one or not
+        #[inline(always)]
         fn num_elems(&self, is_last: bool) -> usize {
             if is_last {
                 self.num_last_elems
@@ -915,12 +935,14 @@ pub mod experimental {
     }
     //
     impl<V: VectorInfo> Borrow<V> for PaddedMut<'_, V> {
+        #[inline(always)]
         fn borrow(&self) -> &V {
             &self.vector
         }
     }
     //
     impl<V: VectorInfo> BorrowMut<V> for PaddedMut<'_, V> {
+        #[inline(always)]
         fn borrow_mut(&mut self) -> &mut V {
             &mut self.vector
         }
@@ -929,18 +951,21 @@ pub mod experimental {
     impl<V: VectorInfo> Deref for PaddedMut<'_, V> {
         type Target = V;
 
+        #[inline(always)]
         fn deref(&self) -> &V {
             &self.vector
         }
     }
     //
     impl<V: VectorInfo> DerefMut for PaddedMut<'_, V> {
+        #[inline(always)]
         fn deref_mut(&mut self) -> &mut V {
             &mut self.vector
         }
     }
     //
     impl<V: VectorInfo> Drop for PaddedMut<'_, V> {
+        #[inline(always)]
         fn drop(&mut self) {
             self.target
                 .copy_from_slice(&self.vector.as_ref()[..self.target.len()]);
@@ -1057,23 +1082,27 @@ pub mod experimental {
         }
 
         /// Returns the number of elements in the container
+        #[inline]
         pub const fn len(&self) -> usize {
             self.len
         }
 
         /// Returns `true` if there are no elements in the container
+        #[inline]
         pub const fn is_empty(&self) -> bool {
             self.len == 0
         }
 
         /// Returns the first element, or None if the container is empty
+        #[inline]
         pub fn first(&mut self) -> Option<Data::ElementRef<'_>> {
             self.get(0)
         }
 
-        // TODO: split_(first|last)
+        // TODO: split_(first|last) : mark inline(always)
 
         /// Returns the last element, or None if the container is empty
+        #[inline]
         pub fn last(&mut self) -> Option<Data::ElementRef<'_>> {
             self.get(self.last_idx())
         }
@@ -1126,16 +1155,18 @@ pub mod experimental {
         }
 
         /// Returns an iterator over contained elements
+        #[inline]
         pub fn iter(&mut self) -> VectorsIter<V, Data> {
             <&mut Self>::into_iter(self)
         }
 
-        // TODO: chunks(_exact)?,
+        // TODO: chunks(_exact)? : mark inline
 
         /// Returns an iterator over N elements at a time, starting at the
         /// beginning of the container
         // TODO: Make a dedicated Iterator so I can implement DoubleEnded + ExactSize + Fused
         //       and add a remainder
+        #[inline]
         pub fn array_chunks<const N: usize>(
             &mut self,
         ) -> impl Iterator<Item = [Data::ElementRef<'_>; N]> {
@@ -1149,11 +1180,12 @@ pub mod experimental {
             })
         }
 
-        // TODO: rchunks(_exact)?
+        // TODO: rchunks(_exact)? : mark inline
 
         /// Extract a slice containing the entire dataset
         ///
         /// Equivalent to `self.index(..)`
+        #[inline]
         pub fn as_slice(&mut self) -> VectorSlice<'_, V, Data> {
             unsafe { Vectors::from_raw_parts(self.data.as_slice(), self.len) }
         }
@@ -1200,6 +1232,7 @@ pub mod experimental {
             (wrap(left_data, mid), wrap(right_data, total_len - mid))
         }
 
+        // TODO: Figure out inlining discipline for the following
         // TODO: r?split(_inclusive)?, r?splitn,
         //       contains, (starts|ends)_with,
         //       (sort|select_nth|binary_search)(_unstable)?_by((_cached)?_key)?,
@@ -1406,6 +1439,7 @@ pub mod experimental {
                 type Item = Data::$elem $(<$lifetime>)?;
                 type IntoIter = $name<$($lifetime,)? V, Data>;
 
+                #[inline]
                 fn into_iter(self) -> Self::IntoIter {
                     let end = self.len;
                     Self::IntoIter {
@@ -1456,18 +1490,17 @@ pub mod experimental {
                     }
                 }
 
+                #[inline]
                 fn size_hint(&self) -> (usize, Option<usize>) {
                     (self.len(), Some(self.len()))
                 }
 
+                #[inline]
                 fn count(self) -> usize {
                     self.len()
                 }
 
-                fn last(mut self) -> Option<Self::Item> {
-                    self.next_back()
-                }
-
+                #[inline]
                 fn nth(&mut self, n: usize) -> Option<Self::Item> {
                     if self.start.checked_add(n)? < self.end {
                         self.start += n - 1;
@@ -1491,6 +1524,7 @@ pub mod experimental {
                     }
                 }
 
+                #[inline]
                 fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
                     if self.start < self.end.checked_sub(n)? {
                         self.end -= n - 1;
@@ -1504,7 +1538,7 @@ pub mod experimental {
             impl<$($lifetime,)? V: VectorInfo, Data: VectorizedImpl<V>> ExactSizeIterator
                 for $name<$($lifetime,)? V, Data>
             {
-                #[inline(always)]
+                #[inline]
                 fn len(&self) -> usize {
                     self.end - self.start
                 }
