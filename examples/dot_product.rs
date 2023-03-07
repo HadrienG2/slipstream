@@ -1,5 +1,4 @@
-use iterator_ilp::IteratorILP;
-use multiversion::{multiversion, target::target_cfg_f};
+use multiversion::multiversion;
 use rand::random;
 use slipstream::prelude::*;
 use std::fmt::Display;
@@ -17,6 +16,7 @@ use std::time::Instant;
 //
 const SIZE: usize = 4096;
 
+#[cfg(feature = "iterator_ilp")]
 // Number of output SIMD vectors we process concurrently in the
 // instruction-parallel version.
 //
@@ -86,31 +86,38 @@ generate_simple_dot!(simple_dot_dynamic, "default");
 /// While it may seem unfair to the simple version that FMA is only used in this
 /// version, it is actually only beneficial here because the simple version is
 /// latency-bound and FMA has a higher latency than addition.
-macro_rules! generate_parallel_dot {
-    ($name:ident, $dispatcher:literal) => {
-        #[inline(never)]
-        #[multiversion(targets = "simd", dispatcher = $dispatcher)]
-        fn $name(lhs: &Vector, rhs: &Vector) -> Scalar {
-            (&lhs.0[..], &rhs.0[..])
-                .vectorize()
-                .into_iter()
-                .fold_ilp::<ILP_STREAMS, _>(
-                    || V::splat(0.0),
-                    |acc, (lvec, rvec)| {
-                        if target_cfg_f!(target_feature = "fma") {
-                            lvec.mul_add(rvec, acc)
-                        } else {
-                            acc + lvec * rvec
-                        }
-                    },
-                    |acc1, acc2| acc1 + acc2,
-                )
-                .horizontal_sum()
-        }
-    };
+#[cfg(feature = "iterator_ilp")]
+mod iterator_ilp_based {
+    use super::*;
+    use iterator_ilp::IteratorILP;
+    use multiversion::target::target_cfg_f;
+
+    macro_rules! generate_parallel_dot {
+        ($name:ident, $dispatcher:literal) => {
+            #[inline(never)]
+            #[multiversion(targets = "simd", dispatcher = $dispatcher)]
+            pub(super) fn $name(lhs: &Vector, rhs: &Vector) -> Scalar {
+                (&lhs.0[..], &rhs.0[..])
+                    .vectorize()
+                    .into_iter()
+                    .fold_ilp::<ILP_STREAMS, _>(
+                        || V::splat(0.0),
+                        |acc, (lvec, rvec)| {
+                            if target_cfg_f!(target_feature = "fma") {
+                                lvec.mul_add(rvec, acc)
+                            } else {
+                                acc + lvec * rvec
+                            }
+                        },
+                        |acc1, acc2| acc1 + acc2,
+                    )
+                    .horizontal_sum()
+            }
+        };
+    }
+    generate_parallel_dot!(parallel_dot_static, "static");
+    generate_parallel_dot!(parallel_dot_dynamic, "default");
 }
-generate_parallel_dot!(parallel_dot_static, "static");
-generate_parallel_dot!(parallel_dot_dynamic, "default");
 
 fn timed<N: Display, R, F: FnMut() -> R>(name: N, mut f: F) -> R {
     let mut result = None;
@@ -129,27 +136,35 @@ fn main() {
 
     let r0 = timed("Scalar dot product", || black_box(&a) * black_box(&b));
 
+    let assert_close = |rtest: Scalar| {
+        const TOLERANCE: f32 = 1e-5;
+        assert!((rtest - r0).abs() < TOLERANCE * r0.abs());
+    };
+
     let r1 = timed("Simple SIMD, compile-time detected", || {
         simple_dot_static(black_box(&a), black_box(&b))
     });
+    assert_close(r1);
     let r2 = timed("Simple SIMD, run-time detected", || {
         simple_dot_dynamic(black_box(&a), black_box(&b))
     });
+    assert_close(r2);
 
-    let r3 = timed("Parallel SIMD, compile-time detected", || {
-        parallel_dot_static(black_box(&a), black_box(&b))
-    });
-    let r4 = timed("Parallel SIMD, run-time detected", || {
-        parallel_dot_dynamic(black_box(&a), black_box(&b))
-    });
-
-    fn assert_close(rref: &Scalar, rtest: &Scalar) {
-        const TOLERANCE: f32 = 1e-5;
-        assert!((rref - rtest).abs() < TOLERANCE * rref.abs());
+    #[cfg(feature = "iterator_ilp")]
+    {
+        let r3 = timed("Parallel SIMD, compile-time detected", || {
+            iterator_ilp_based::parallel_dot_static(black_box(&a), black_box(&b))
+        });
+        assert_close(r3);
+        let r4 = timed("Parallel SIMD, run-time detected", || {
+            iterator_ilp_based::parallel_dot_dynamic(black_box(&a), black_box(&b))
+        });
+        assert_close(r4);
     }
 
-    assert_close(&r0, &r1);
-    assert_close(&r0, &r2);
-    assert_close(&r0, &r3);
-    assert_close(&r0, &r4);
+    #[cfg(not(feature = "iterator_ilp"))]
+    println!(
+        "Please enable the iterator_ilp feature of this crate \
+        to see the impact of instruction-level parallelism on performance"
+    );
 }
