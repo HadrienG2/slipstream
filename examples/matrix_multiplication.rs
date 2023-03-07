@@ -94,11 +94,8 @@ macro_rules! generate_mat_mult {
             for (out_row, lhs_row) in out.chunks_exact_mut(SIZE).zip(lhs.0.chunks_exact(SIZE)) {
                 // Prepare to concurrently generate ILP_STREAMS output vectors
                 // within the current row. Keep track of where we are in the row.
-                for (chunk_idx, mut out_chunk) in out_row
-                    .vectorize()
-                    // FIXME: array_chunks doesn't optimize well, fix that
-                    .array_chunks::<ILP_STREAMS>()
-                    .enumerate()
+                for (chunk_idx, mut out_chunk) in
+                    out_row.vectorize().chunks_exact(ILP_STREAMS).enumerate()
                 {
                     // Set up output accumulators
                     let mut accumulators = [V::default(); ILP_STREAMS];
@@ -106,10 +103,9 @@ macro_rules! generate_mat_mult {
                     // Jointly iterate over columns of lhs and rows and rhs.
                     // Within the selected row of rhs, target the columns that
                     // correspond to the output columns that we're generating.
-                    for (&lhs_elem, rhs_chunk) in lhs_row.iter().zip(
+                    for (&lhs_elem, mut rhs_chunk) in lhs_row.iter().zip(
                         rhs_vecs
-                            // FIXME: array_chunks doesn't optimize well, fix that
-                            .array_chunks::<ILP_STREAMS>()
+                            .chunks_exact(ILP_STREAMS)
                             .skip(chunk_idx)
                             .step_by(CHUNKS_PER_ROW),
                     ) {
@@ -117,7 +113,7 @@ macro_rules! generate_mat_mult {
                         let lhs_elem_vec = V::splat(lhs_elem);
 
                         // Add contribution from this rhs row to the output accumulator
-                        for (acc, &rhs_vec) in accumulators.iter_mut().zip(rhs_chunk.iter()) {
+                        for (acc, rhs_vec) in accumulators.iter_mut().zip(rhs_chunk.iter()) {
                             if target_cfg_f!(target_feature = "fma") {
                                 *acc = lhs_elem_vec.mul_add(rhs_vec, *acc);
                             } else {
@@ -127,8 +123,8 @@ macro_rules! generate_mat_mult {
                     }
 
                     // Write down results into output storage
-                    for (out_vec, &acc) in out_chunk.iter_mut().zip(accumulators.iter()) {
-                        **out_vec = acc;
+                    for (mut out_vec, &acc) in out_chunk.iter().zip(accumulators.iter()) {
+                        *out_vec = acc;
                     }
                 }
             }
