@@ -18,6 +18,7 @@ use super::{
 use crate::{vectorize::Vectorizable, Vector};
 use core::{marker::PhantomData, num::NonZeroUsize};
 
+// NOTE: Remember to re-export these in the parent vectorize module
 pub use index::VectorIndex;
 pub use iterators::{Chunks, IntoIter, Iter};
 
