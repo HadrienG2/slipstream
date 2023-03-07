@@ -191,3 +191,5 @@ unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data>
         (Bound::Included(lower_included), upper).get_unchecked(vectors)
     }
 }
+
+// FIXME: Tests
