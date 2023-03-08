@@ -190,6 +190,8 @@ pub(crate) mod tests {
     use proptest::prelude::*;
     use std::cell::Cell;
 
+    // === COMMON TEST HARNESS ===
+
     // Vector type we are going to test this module + submodules with
     //
     // We can afford to only test for a single vector type because all
@@ -200,6 +202,15 @@ pub(crate) mod tests {
     pub(crate) type V = u32x16;
     pub(crate) type VScalar = <V as VectorInfo>::Scalar;
     pub(crate) type VArray = <V as VectorInfo>::Array;
+
+    prop_compose! {
+        /// Generate an arbitrary value of type V
+        pub(crate) fn any_v()(array in any::<VArray>()) -> V {
+            V::from(array)
+        }
+    }
+
+    // === TESTS FOR THIS MODULE ===
 
     // Check that array_from_fn produces the expected output
     proptest! {
@@ -289,12 +300,6 @@ pub(crate) mod tests {
         assert_eq!(V::LANES, 16);
         let _: [u32; 16] = VArray::default();
         V::assert_overaligned_array();
-    }
-
-    prop_compose! {
-        pub(crate) fn any_v()(array in any::<VArray>()) -> V {
-            V::from(array)
-        }
     }
 
     proptest! {
