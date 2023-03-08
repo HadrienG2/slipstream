@@ -16,7 +16,13 @@ use crate::{
     vectorize::{Vectorizable, Vectors},
     Vector,
 };
-use core::{marker::PhantomData, mem::MaybeUninit, ptr::NonNull};
+use core::{
+    fmt::{self, Debug, Pointer},
+    hash::Hash,
+    marker::PhantomData,
+    mem::MaybeUninit,
+    ptr::NonNull,
+};
 
 pub use proxies::{PaddedMut, UnalignedMut};
 
@@ -212,6 +218,44 @@ impl<'target, V: VectorInfo> AlignedData<'target, V> {
     }
 }
 //
+impl<V: VectorInfo> Debug for AlignedData<'_, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <NonNull<V> as Debug>::fmt(&self.0, f)
+    }
+}
+//
+impl<V: VectorInfo> Eq for AlignedData<'_, V> {}
+//
+impl<V: VectorInfo> Hash for AlignedData<'_, V> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
+    }
+}
+//
+impl<V: VectorInfo> Ord for AlignedData<'_, V> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+//
+impl<V: VectorInfo> PartialEq for AlignedData<'_, V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+//
+impl<V: VectorInfo> PartialOrd for AlignedData<'_, V> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+//
+impl<V: VectorInfo> Pointer for AlignedData<'_, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <NonNull<V> as Pointer>::fmt(&self.0, f)
+    }
+}
+//
 unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedData<'target, V> {
     type Element = V;
     type ElementRef<'result> = V where Self: 'result;
@@ -306,6 +350,44 @@ impl<'target, V: VectorInfo> From<&'target mut [V]> for AlignedDataMut<'target, 
     }
 }
 //
+impl<'target, V: VectorInfo> Debug for AlignedDataMut<'target, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <AlignedData<'target, V> as Debug>::fmt(&self.0, f)
+    }
+}
+//
+impl<V: VectorInfo> Eq for AlignedDataMut<'_, V> {}
+//
+impl<V: VectorInfo> Hash for AlignedDataMut<'_, V> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
+    }
+}
+//
+impl<V: VectorInfo> Ord for AlignedDataMut<'_, V> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+//
+impl<V: VectorInfo> PartialEq for AlignedDataMut<'_, V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+//
+impl<V: VectorInfo> PartialOrd for AlignedDataMut<'_, V> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+//
+impl<'target, V: VectorInfo> Pointer for AlignedDataMut<'target, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <AlignedData<'target, V> as Pointer>::fmt(&self.0, f)
+    }
+}
+//
 unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedDataMut<'target, V> {
     type Element = &'target mut V;
     type ElementRef<'result> = &'result mut V where Self: 'result;
@@ -387,6 +469,44 @@ impl<'target, V: VectorInfo> UnalignedData<'target, V> {
     }
 }
 //
+impl<V: VectorInfo> Debug for UnalignedData<'_, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <NonNull<V::Array> as Debug>::fmt(&self.0, f)
+    }
+}
+//
+impl<V: VectorInfo> Eq for UnalignedData<'_, V> {}
+//
+impl<V: VectorInfo> Hash for UnalignedData<'_, V> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
+    }
+}
+//
+impl<V: VectorInfo> Ord for UnalignedData<'_, V> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+//
+impl<V: VectorInfo> PartialEq for UnalignedData<'_, V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+//
+impl<V: VectorInfo> PartialOrd for UnalignedData<'_, V> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+//
+impl<V: VectorInfo> Pointer for UnalignedData<'_, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <NonNull<V::Array> as Pointer>::fmt(&self.0, f)
+    }
+}
+//
 unsafe impl<'target, V: VectorInfo> Vectorized<V> for UnalignedData<'target, V> {
     type Element = V;
     type ElementRef<'result> = V where Self: 'result;
@@ -454,6 +574,44 @@ impl<'target, V: VectorInfo> From<&'target mut [V::Scalar]> for UnalignedDataMut
             unsafe { UnalignedData::from_data_ptr(NonNull::from(data)) },
             PhantomData,
         )
+    }
+}
+//
+impl<'target, V: VectorInfo> Debug for UnalignedDataMut<'target, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <UnalignedData<'target, V> as Debug>::fmt(&self.0, f)
+    }
+}
+//
+impl<V: VectorInfo> Eq for UnalignedDataMut<'_, V> {}
+//
+impl<V: VectorInfo> Hash for UnalignedDataMut<'_, V> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
+    }
+}
+//
+impl<V: VectorInfo> Ord for UnalignedDataMut<'_, V> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+//
+impl<V: VectorInfo> PartialEq for UnalignedDataMut<'_, V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+//
+impl<V: VectorInfo> PartialOrd for UnalignedDataMut<'_, V> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+//
+impl<'target, V: VectorInfo> Pointer for UnalignedDataMut<'target, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <UnalignedData<'target, V> as Pointer>::fmt(&self.0, f)
     }
 }
 //
@@ -576,6 +734,21 @@ impl<'target, V: VectorInfo> PaddedData<'target, V> {
     }
 }
 //
+impl<'target, V: VectorInfo> Debug for PaddedData<'target, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PaddedData")
+            .field("vectors", &self.vectors)
+            .field("last_vector", &self.last_vector)
+            .finish()
+    }
+}
+//
+impl<'target, V: VectorInfo> Pointer for PaddedData<'target, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <UnalignedData<'target, V> as Pointer>::fmt(&self.vectors, f)
+    }
+}
+//
 unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedData<'target, V> {
     type Element = V;
     type ElementRef<'result> = V where Self: 'result;
@@ -686,6 +859,21 @@ impl<'target, V: VectorInfo> PaddedDataMut<'target, V> {
         } else {
             V::LANES
         }
+    }
+}
+//
+impl<'target, V: VectorInfo> Debug for PaddedDataMut<'target, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PaddedDataMut")
+            .field("inner", &self.inner)
+            .field("num_last_elems", &self.num_last_elems)
+            .finish()
+    }
+}
+//
+impl<'target, V: VectorInfo> Pointer for PaddedDataMut<'target, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <PaddedData<'target, V> as Pointer>::fmt(&self.inner, f)
     }
 }
 //
