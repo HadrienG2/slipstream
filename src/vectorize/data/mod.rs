@@ -17,7 +17,6 @@ use crate::{
     Vector,
 };
 use core::{
-    borrow::{Borrow, BorrowMut},
     fmt::{self, Debug, Pointer},
     hash::Hash,
     marker::PhantomData,
@@ -192,11 +191,9 @@ pub unsafe trait VectorizedSliceImpl<V: VectorInfo>: VectorizedImpl<V> + Sized {
 #[derive(Copy, Clone)]
 pub struct AlignedData<'target, V: VectorInfo>(NonNull<V>, PhantomData<&'target [V]>);
 //
-impl<'target, V: VectorInfo, VSlice: Borrow<[V]> + ?Sized> From<&'target VSlice>
-    for AlignedData<'target, V>
-{
-    fn from(data: &'target VSlice) -> Self {
-        unsafe { Self::from_data_ptr(NonNull::from(data.borrow())) }
+impl<'target, V: VectorInfo> From<&'target [V]> for AlignedData<'target, V> {
+    fn from(data: &'target [V]) -> Self {
+        unsafe { Self::from_data_ptr(NonNull::from(data)) }
     }
 }
 //
@@ -318,7 +315,7 @@ unsafe impl<V: VectorInfo, const SIZE: usize> VectorizedImpl<V> for [V; SIZE] {
 
     #[inline(always)]
     fn as_slice(&mut self) -> AlignedData<V> {
-        AlignedData::from(&self[..])
+        (&self[..]).into()
     }
 
     type Unaligned = Self;
@@ -344,12 +341,10 @@ pub struct AlignedDataMut<'target, V: VectorInfo>(
     PhantomData<&'target mut [V]>,
 );
 //
-impl<'target, V: VectorInfo, VSlice: BorrowMut<[V]> + ?Sized> From<&'target mut VSlice>
-    for AlignedDataMut<'target, V>
-{
-    fn from(data: &'target mut VSlice) -> Self {
+impl<'target, V: VectorInfo> From<&'target mut [V]> for AlignedDataMut<'target, V> {
+    fn from(data: &'target mut [V]) -> Self {
         Self(
-            unsafe { AlignedData::from_data_ptr(NonNull::from(data.borrow_mut())) },
+            unsafe { AlignedData::from_data_ptr(NonNull::from(data)) },
             PhantomData,
         )
     }
@@ -443,15 +438,13 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for AlignedDataMut<'t
 //
 // Base pointer of an unaligned `&[Vector]` slice, tagged with lifetime
 // information. Built out of a `&[Scalar]` slice. Usable length is the
-// number of **complete** SIMD vectors within the underlying scalar slice.
+// number of complete SIMD vectors within the underlying scalar slice.
 #[derive(Copy, Clone)]
 pub struct UnalignedData<'target, V: VectorInfo>(NonNull<V::Array>, PhantomData<&'target [V]>);
 //
-impl<'target, V: VectorInfo, ScalarSlice: Borrow<[V::Scalar]> + ?Sized> From<&'target ScalarSlice>
-    for UnalignedData<'target, V>
-{
-    fn from(data: &'target ScalarSlice) -> Self {
-        unsafe { Self::from_data_ptr(NonNull::from(data.borrow())) }
+impl<'target, V: VectorInfo> From<&'target [V::Scalar]> for UnalignedData<'target, V> {
+    fn from(data: &'target [V::Scalar]) -> Self {
+        unsafe { Self::from_data_ptr(NonNull::from(data)) }
     }
 }
 //
@@ -575,12 +568,10 @@ pub struct UnalignedDataMut<'target, V: VectorInfo>(
     PhantomData<&'target mut [V]>,
 );
 //
-impl<'target, V: VectorInfo, ScalarSlice: BorrowMut<[V::Scalar]> + ?Sized>
-    From<&'target mut ScalarSlice> for UnalignedDataMut<'target, V>
-{
-    fn from(data: &'target mut ScalarSlice) -> Self {
+impl<'target, V: VectorInfo> From<&'target mut [V::Scalar]> for UnalignedDataMut<'target, V> {
+    fn from(data: &'target mut [V::Scalar]) -> Self {
         Self(
-            unsafe { UnalignedData::from_data_ptr(NonNull::from(data.borrow_mut())) },
+            unsafe { UnalignedData::from_data_ptr(NonNull::from(data)) },
             PhantomData,
         )
     }
@@ -693,11 +684,10 @@ impl<'target, V: VectorInfo> PaddedData<'target, V> {
     ///
     /// - `NeedsPadding` if padding was needed but not provided
     pub(crate) fn new(
-        data: &'target (impl Borrow<[V::Scalar]> + ?Sized),
+        data: &'target [V::Scalar],
         padding: Option<V::Scalar>,
     ) -> Result<(Self, usize), VectorizeError> {
         // Start by treating most of the slice as unaligned SIMD data
-        let data = data.borrow();
         let mut vectors = UnalignedData::from(data);
 
         // Decide what the last vector of the simulated slice will be
@@ -849,7 +839,7 @@ impl<'target, V: VectorInfo> PaddedDataMut<'target, V> {
     ///
     /// - `NeedsPadding` if padding was needed but not provided
     pub(crate) fn new(
-        data: &'target mut (impl BorrowMut<[V::Scalar]> + ?Sized),
+        data: &'target mut [V::Scalar],
         padding: Option<V::Scalar>,
     ) -> Result<Self, VectorizeError> {
         let (inner, num_last_elems) = PaddedData::new(data, padding)?;
