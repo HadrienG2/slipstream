@@ -74,65 +74,66 @@ pub use vectors::{
 /// inline some steps, so we need to clone it for performance...
 #[inline(always)]
 fn array_from_fn<const SIZE: usize, T>(mut idx_to_elem: impl FnMut(usize) -> T) -> [T; SIZE] {
+    /// Partially initialized array
+    struct PartialArray<T, const N: usize> {
+        inner: MaybeUninit<[T; N]>,
+        num_initialized: usize,
+    }
+    //
+    impl<T, const N: usize> PartialArray<T, N> {
+        /// Prepare to iteratively initialize an array
+        #[inline(always)]
+        fn new() -> Self {
+            Self {
+                inner: MaybeUninit::uninit(),
+                num_initialized: 0,
+            }
+        }
+
+        /// Initialize the next array element
+        #[inline(always)]
+        fn push(&mut self, value: T) {
+            assert!(self.num_initialized < N);
+            unsafe {
+                let ptr = self
+                    .inner
+                    .as_mut_ptr()
+                    .cast::<T>()
+                    .add(self.num_initialized);
+                ptr.write(value);
+                self.num_initialized += 1;
+            }
+        }
+
+        /// Assume the array is fully initialized and collect its value
+        #[inline(always)]
+        fn collect(self) -> [T; N] {
+            assert_eq!(self.num_initialized, N);
+            unsafe {
+                let result = self.inner.assume_init_read();
+                core::mem::forget(self);
+                result
+            }
+        }
+    }
+    //
+    impl<T, const N: usize> Drop for PartialArray<T, N> {
+        /// Drop already initialized elements on panic
+        #[inline(always)]
+        fn drop(&mut self) {
+            let ptr = self.inner.as_mut_ptr().cast::<T>();
+            for idx in 0..self.num_initialized {
+                unsafe { ptr.add(idx).drop_in_place() };
+            }
+        }
+    }
+
+    // Use PartialArray to implement the array_from_fn functionality
     let mut array = PartialArray::new();
     for idx in 0..SIZE {
         array.push(idx_to_elem(idx));
     }
     array.collect()
-}
-
-/// Partially initialized array
-struct PartialArray<T, const N: usize> {
-    inner: MaybeUninit<[T; N]>,
-    num_initialized: usize,
-}
-//
-impl<T, const N: usize> PartialArray<T, N> {
-    /// Prepare to iteratively initialize an array
-    #[inline(always)]
-    fn new() -> Self {
-        Self {
-            inner: MaybeUninit::uninit(),
-            num_initialized: 0,
-        }
-    }
-
-    /// Initialize the next array element
-    #[inline(always)]
-    fn push(&mut self, value: T) {
-        assert!(self.num_initialized < N);
-        unsafe {
-            let ptr = self
-                .inner
-                .as_mut_ptr()
-                .cast::<T>()
-                .add(self.num_initialized);
-            ptr.write(value);
-            self.num_initialized += 1;
-        }
-    }
-
-    /// Assume the array is fully initialized and collect its value
-    #[inline(always)]
-    fn collect(self) -> [T; N] {
-        assert_eq!(self.num_initialized, N);
-        unsafe {
-            let result = self.inner.assume_init_read();
-            core::mem::forget(self);
-            result
-        }
-    }
-}
-//
-impl<T, const N: usize> Drop for PartialArray<T, N> {
-    /// Drop already initialized elements on panic
-    #[inline(always)]
-    fn drop(&mut self) {
-        let ptr = self.inner.as_mut_ptr().cast::<T>();
-        for idx in 0..self.num_initialized {
-            unsafe { ptr.add(idx).drop_in_place() };
-        }
-    }
 }
 
 /// Query the configuration of the [`Vector`] type
@@ -182,4 +183,119 @@ unsafe impl<A: Align, B: Repr, const S: usize> VectorInfo for Vector<A, B, S> {
     }
 }
 
-// FIXME: Tests
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::u32x16;
+    use proptest::prelude::*;
+    use std::cell::Cell;
+
+    // Vector type we are going to test this module + submodules with
+    //
+    // We can afford to only test for a single vector type because all
+    // functionality within this module is about shuffling data around without
+    // interpreting it, so we just need a vector/element type with enough bytes
+    // to assert that multi-byte operations work, multi-lanes operation work,
+    // and (over-)alignment is handled correctly.
+    pub(crate) type V = u32x16;
+    pub(crate) type VScalar = <V as VectorInfo>::Scalar;
+    pub(crate) type VArray = <V as VectorInfo>::Array;
+
+    // Check that array_from_fn produces the expected output
+    proptest! {
+        #[test]
+        fn array_from_fn(input in any::<[u64; 32]>()) {
+            let output = super::array_from_fn(|idx| input[idx]);
+            assert_eq!(output, input);
+        }
+    }
+
+    // Check that array_from_fn handles Drop correctly
+    #[derive(Debug)]
+    struct Element;
+    //
+    thread_local! {
+        pub static CREATED_ELEMENTS: Cell<usize> = Cell::new(0);
+        pub static DROPPED_ELEMENTS: Cell<usize> = Cell::new(0);
+    }
+    //
+    fn reset_element_counters() {
+        CREATED_ELEMENTS.with(|c| c.set(0));
+        DROPPED_ELEMENTS.with(|c| c.set(0));
+    }
+    //
+    fn created_elements() -> usize {
+        CREATED_ELEMENTS.with(|c| c.get())
+    }
+    //
+    fn dropped_elements() -> usize {
+        DROPPED_ELEMENTS.with(|c| c.get())
+    }
+    //
+    impl Default for Element {
+        fn default() -> Self {
+            CREATED_ELEMENTS.with(|c| c.set(c.get() + 1));
+            Self
+        }
+    }
+    //
+    impl Drop for Element {
+        fn drop(&mut self) {
+            DROPPED_ELEMENTS.with(|c| c.set(c.get() + 1));
+        }
+    }
+    //
+    #[test]
+    fn array_from_fn_drop() {
+        // Elements should be created and dropped the right number of times
+        const SIZE: usize = 4;
+        let arr: [Element; SIZE] = super::array_from_fn(|idx| {
+            assert_eq!(created_elements(), idx);
+            assert_eq!(dropped_elements(), 0);
+            Element::default()
+        });
+        assert_eq!(created_elements(), SIZE);
+        assert_eq!(dropped_elements(), 0);
+        std::mem::drop(arr);
+        assert_eq!(created_elements(), SIZE);
+        assert_eq!(dropped_elements(), SIZE);
+        reset_element_counters();
+
+        // Panics should be handled correctly
+        for panic_idx in 0..SIZE {
+            std::panic::catch_unwind(|| {
+                super::array_from_fn::<SIZE, Element>(|idx| {
+                    assert_eq!(created_elements(), idx);
+                    assert_eq!(dropped_elements(), 0);
+                    if idx == panic_idx {
+                        panic!();
+                    }
+                    Element::default()
+                })
+            })
+            .expect_err("Should have panicked");
+            assert_eq!(created_elements(), panic_idx);
+            assert_eq!(dropped_elements(), panic_idx);
+            reset_element_counters();
+        }
+    }
+
+    // Check that the VectorInfo trait is implemented correctly
+    #[test]
+    fn vector_info() {
+        // This test depends on the choice of V made above, assert it
+        let _: u32x16 = V::default();
+        let _: u32 = 0 as VScalar; // Assert V::Scalar is u32
+        assert_eq!(V::LANES, 16);
+        let _: [u32; 16] = VArray::default();
+        V::assert_overaligned_array();
+    }
+
+    proptest! {
+        #[test]
+        fn v_from_fn(input in any::<VArray>()) {
+            let output = V::from_fn(|idx| input[idx]);
+            assert_eq!(VArray::from(output), input);
+        }
+    }
+}
