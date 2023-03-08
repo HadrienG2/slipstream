@@ -17,6 +17,7 @@ use crate::{
     Vector,
 };
 use core::{
+    borrow::Borrow,
     fmt::{self, Debug, Pointer},
     hash::Hash,
     marker::PhantomData,
@@ -157,7 +158,9 @@ pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
 /// `VectorizedImpl` that is a true slice, i.e. does not own its elements
 /// and can be split
 #[doc(hidden)]
-pub unsafe trait VectorizedSliceImpl<V: VectorInfo>: VectorizedImpl<V> + Sized {
+pub unsafe trait VectorizedSliceImpl<V: VectorInfo>:
+    VectorizedImpl<V> + Sized + Debug
+{
     /// Construct an empty slice
     fn empty() -> Self;
 
@@ -218,6 +221,12 @@ impl<'target, V: VectorInfo> AlignedData<'target, V> {
     }
 }
 //
+impl<V: VectorInfo> Borrow<NonNull<V>> for AlignedData<'_, V> {
+    fn borrow(&self) -> &NonNull<V> {
+        &self.0
+    }
+}
+//
 impl<V: VectorInfo> Debug for AlignedData<'_, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         <NonNull<V> as Debug>::fmt(&self.0, f)
@@ -238,15 +247,15 @@ impl<V: VectorInfo> Ord for AlignedData<'_, V> {
     }
 }
 //
-impl<V: VectorInfo> PartialEq for AlignedData<'_, V> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+impl<V: VectorInfo, Ptr: Borrow<NonNull<V>>> PartialEq<Ptr> for AlignedData<'_, V> {
+    fn eq(&self, other: &Ptr) -> bool {
+        self.0 == *other.borrow()
     }
 }
 //
-impl<V: VectorInfo> PartialOrd for AlignedData<'_, V> {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        self.0.partial_cmp(&other.0)
+impl<'other, V: VectorInfo, Ptr: Borrow<NonNull<V>>> PartialOrd<Ptr> for AlignedData<'_, V> {
+    fn partial_cmp(&self, other: &Ptr) -> Option<core::cmp::Ordering> {
+        self.0.partial_cmp(other.borrow())
     }
 }
 //
@@ -350,6 +359,12 @@ impl<'target, V: VectorInfo> From<&'target mut [V]> for AlignedDataMut<'target, 
     }
 }
 //
+impl<V: VectorInfo> Borrow<NonNull<V>> for AlignedDataMut<'_, V> {
+    fn borrow(&self) -> &NonNull<V> {
+        self.0.borrow()
+    }
+}
+//
 impl<'target, V: VectorInfo> Debug for AlignedDataMut<'target, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         <AlignedData<'target, V> as Debug>::fmt(&self.0, f)
@@ -370,15 +385,15 @@ impl<V: VectorInfo> Ord for AlignedDataMut<'_, V> {
     }
 }
 //
-impl<V: VectorInfo> PartialEq for AlignedDataMut<'_, V> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+impl<V: VectorInfo, Ptr: Borrow<NonNull<V>>> PartialEq<Ptr> for AlignedDataMut<'_, V> {
+    fn eq(&self, other: &Ptr) -> bool {
+        self.0 == *other.borrow()
     }
 }
 //
-impl<V: VectorInfo> PartialOrd for AlignedDataMut<'_, V> {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        self.0.partial_cmp(&other.0)
+impl<'other, V: VectorInfo, Ptr: Borrow<NonNull<V>>> PartialOrd<Ptr> for AlignedDataMut<'_, V> {
+    fn partial_cmp(&self, other: &Ptr) -> Option<core::cmp::Ordering> {
+        self.0.partial_cmp(other.borrow())
     }
 }
 //
@@ -469,6 +484,12 @@ impl<'target, V: VectorInfo> UnalignedData<'target, V> {
     }
 }
 //
+impl<V: VectorInfo> Borrow<NonNull<V::Array>> for UnalignedData<'_, V> {
+    fn borrow(&self) -> &NonNull<V::Array> {
+        &self.0
+    }
+}
+//
 impl<V: VectorInfo> Debug for UnalignedData<'_, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         <NonNull<V::Array> as Debug>::fmt(&self.0, f)
@@ -489,15 +510,17 @@ impl<V: VectorInfo> Ord for UnalignedData<'_, V> {
     }
 }
 //
-impl<V: VectorInfo> PartialEq for UnalignedData<'_, V> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+impl<V: VectorInfo, Ptr: Borrow<NonNull<V::Array>>> PartialEq<Ptr> for UnalignedData<'_, V> {
+    fn eq(&self, other: &Ptr) -> bool {
+        self.0 == *other.borrow()
     }
 }
 //
-impl<V: VectorInfo> PartialOrd for UnalignedData<'_, V> {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        self.0.partial_cmp(&other.0)
+impl<'other, V: VectorInfo, Ptr: Borrow<NonNull<V::Array>>> PartialOrd<Ptr>
+    for UnalignedData<'_, V>
+{
+    fn partial_cmp(&self, other: &Ptr) -> Option<core::cmp::Ordering> {
+        self.0.partial_cmp(other.borrow())
     }
 }
 //
@@ -577,6 +600,12 @@ impl<'target, V: VectorInfo> From<&'target mut [V::Scalar]> for UnalignedDataMut
     }
 }
 //
+impl<V: VectorInfo> Borrow<NonNull<V::Array>> for UnalignedDataMut<'_, V> {
+    fn borrow(&self) -> &NonNull<V::Array> {
+        self.0.borrow()
+    }
+}
+//
 impl<'target, V: VectorInfo> Debug for UnalignedDataMut<'target, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         <UnalignedData<'target, V> as Debug>::fmt(&self.0, f)
@@ -597,15 +626,17 @@ impl<V: VectorInfo> Ord for UnalignedDataMut<'_, V> {
     }
 }
 //
-impl<V: VectorInfo> PartialEq for UnalignedDataMut<'_, V> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+impl<V: VectorInfo, Ptr: Borrow<NonNull<V::Array>>> PartialEq<Ptr> for UnalignedDataMut<'_, V> {
+    fn eq(&self, other: &Ptr) -> bool {
+        self.0 == *other.borrow()
     }
 }
 //
-impl<V: VectorInfo> PartialOrd for UnalignedDataMut<'_, V> {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        self.0.partial_cmp(&other.0)
+impl<'other, V: VectorInfo, Ptr: Borrow<NonNull<V::Array>>> PartialOrd<Ptr>
+    for UnalignedDataMut<'_, V>
+{
+    fn partial_cmp(&self, other: &Ptr) -> Option<core::cmp::Ordering> {
+        self.0.partial_cmp(other.borrow())
     }
 }
 //
@@ -734,6 +765,12 @@ impl<'target, V: VectorInfo> PaddedData<'target, V> {
     }
 }
 //
+impl<V: VectorInfo> Borrow<NonNull<V::Array>> for PaddedData<'_, V> {
+    fn borrow(&self) -> &NonNull<V::Array> {
+        self.vectors.borrow()
+    }
+}
+//
 impl<'target, V: VectorInfo> Debug for PaddedData<'target, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PaddedData")
@@ -859,6 +896,12 @@ impl<'target, V: VectorInfo> PaddedDataMut<'target, V> {
         } else {
             V::LANES
         }
+    }
+}
+//
+impl<V: VectorInfo> Borrow<NonNull<V::Array>> for PaddedDataMut<'_, V> {
+    fn borrow(&self) -> &NonNull<V::Array> {
+        self.inner.borrow()
     }
 }
 //
@@ -1032,4 +1075,267 @@ impl_vectorized_for_tuple!(A, B, C, D, E, F);
 impl_vectorized_for_tuple!(A, B, C, D, E, F, G);
 impl_vectorized_for_tuple!(A, B, C, D, E, F, G, H);
 
-// FIXME: Tests
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::vectorize::tests::{any_v, VArray, VScalar, V};
+    use proptest::prelude::*;
+    use std::{collections::hash_map::DefaultHasher, hash::Hasher};
+
+    // === COMMON TEST HARNESS ===
+
+    /// Maximum length (in SIMD vector elements) that we need to test in order
+    /// to be sure to observe all interesting effects
+    const MAX_SIMD_LEN: usize = 4;
+
+    /// Generate the building blocks to initialize AlignedData(Mut)?
+    pub(crate) fn aligned_init_input() -> impl Strategy<Value = Vec<V>> {
+        prop::collection::vec(any_v(), 0..=MAX_SIMD_LEN)
+    }
+
+    /// Arbitrary array of aligned data
+    pub(crate) type AlignedArray = [V; MAX_SIMD_LEN];
+    pub(crate) fn any_aligned_array() -> impl Strategy<Value = AlignedArray> {
+        prop::array::uniform4(any_v())
+    }
+
+    /// Generate the building blocks to initialize UnalignedData(Mut)?
+    pub(crate) fn unaligned_init_input() -> impl Strategy<Value = Vec<VScalar>> {
+        prop::collection::vec(any::<VScalar>(), 0..=MAX_SIMD_LEN * V::LANES)
+    }
+
+    /// Generate the building blocks to initialize PaddedData(Mut)?
+    pub(crate) fn padded_init_input() -> impl Strategy<Value = (Vec<VScalar>, Option<VScalar>)> {
+        (unaligned_init_input(), any::<Option<VScalar>>())
+    }
+
+    // === TESTS FOR THIS MODULE ===
+
+    // Hash a value
+    fn hash<T: Hash>(t: &T) -> u64 {
+        let mut s = DefaultHasher::new();
+        t.hash(&mut s);
+        s.finish()
+    }
+
+    // 'static version of most types for empty slice testing
+    type AlignedStatic = AlignedData<'static, V>;
+    type AlignedStaticMut = AlignedDataMut<'static, V>;
+    type UnalignedStatic = UnalignedData<'static, V>;
+    type UnalignedStaticMut = UnalignedDataMut<'static, V>;
+    type PaddedStatic = PaddedData<'static, V>;
+    type PaddedStaticMut = PaddedDataMut<'static, V>;
+
+    #[test]
+    fn empty_aligned() {
+        assert_eq!(AlignedStatic::empty(), AlignedStatic::empty());
+        assert_eq!(AlignedStatic::empty(), AlignedStaticMut::empty());
+        assert_eq!(AlignedStaticMut::empty(), AlignedStaticMut::empty());
+    }
+
+    #[test]
+    fn empty_unaligned() {
+        assert_eq!(UnalignedStatic::empty(), UnalignedStatic::empty());
+        assert_eq!(UnalignedStatic::empty(), UnalignedStaticMut::empty());
+        assert_eq!(UnalignedStaticMut::empty(), UnalignedStaticMut::empty());
+    }
+
+    #[test]
+    fn empty_padded() {
+        // Can't even test equality, will just check constructor doesn't crash
+        PaddedStatic::empty();
+        PaddedStaticMut::empty();
+    }
+
+    // Test properties of a freshly initialized data pointer
+    fn test_init<
+        Target,
+        DataFromRaw: Borrow<NonNull<Target>> + Debug,
+        StaticData: Borrow<NonNull<Target>> + Debug,
+        StaticDataMut: Borrow<NonNull<Target>> + Debug,
+        Data: Borrow<NonNull<Target>>
+            + Debug
+            + Hash
+            + PartialEq
+            + PartialEq<DataFromRaw>
+            + PartialEq<NonNull<Target>>
+            + PartialEq<StaticData>
+            + PartialEq<StaticDataMut>
+            + Pointer
+            + VectorizedImpl<V>,
+    >(
+        slice_ptr: NonNull<[Target]>,
+        data: Data,
+        data_from_raw: DataFromRaw,
+        empty: StaticData,
+        empty_mut: StaticDataMut,
+    ) {
+        let base_ptr = slice_ptr.cast::<Target>();
+        let base_ptr_debug = format!("{base_ptr:?}");
+        let base_ptr_hash = hash(&base_ptr);
+        let base_ptr_pointer = format!("{base_ptr:p}");
+
+        assert_eq!(data, data);
+        assert_eq!(data, base_ptr);
+        assert_eq!(data, data_from_raw);
+
+        if slice_ptr.len() > 0 {
+            assert_ne!(data, empty);
+            assert_ne!(data, empty_mut);
+        }
+
+        assert_eq!(format!("{data:?}"), base_ptr_debug);
+        assert_eq!(hash(&data), base_ptr_hash);
+        assert_eq!(format!("{data:p}"), base_ptr_pointer);
+    }
+
+    proptest! {
+        // Test initializing AlignedVectors(Mut)?
+        #[test]
+        fn init_aligned(mut data in aligned_init_input()) {
+            let slice_ptr = NonNull::from(&data[..]);
+            let aligned_raw = unsafe { AlignedData::from_data_ptr(slice_ptr) };
+
+            let mut aligned = AlignedData::from(&data[..]);
+            test_init(
+                slice_ptr,
+                aligned_raw,
+                aligned,
+                AlignedStatic::empty(),
+                AlignedStaticMut::empty(),
+            );
+            assert_eq!(aligned.as_slice(), aligned_raw);
+            unsafe {
+                assert_eq!(aligned.as_aligned_unchecked(), aligned_raw);
+                assert_eq!(aligned.as_unaligned_unchecked(), aligned_raw);
+            }
+
+            test_init(
+                slice_ptr,
+                aligned_raw,
+                AlignedDataMut::from(&mut data[..]),
+                AlignedStatic::empty(),
+                AlignedStaticMut::empty(),
+            );
+            let mut aligned_mut = AlignedDataMut::from(&mut data[..]);
+            assert_eq!(aligned_mut.as_slice(), aligned_raw);
+            unsafe {
+                assert_eq!(aligned_mut.as_aligned_unchecked(), aligned_raw);
+                assert_eq!(AlignedDataMut::from(&mut data[..]).as_unaligned_unchecked(), aligned_raw);
+            }
+        }
+
+        // Test treating arrays as shared slices
+        #[test]
+        fn init_array(mut data in any_aligned_array()) {
+            let data_ptr = |data: &AlignedArray| NonNull::from(data).cast::<V>();
+            let slice = |data| <AlignedArray as VectorizedImpl<V>>::as_slice(data);
+
+            let mut aligned = unsafe { data.as_aligned_unchecked() };
+            let mut unaligned = unsafe { data.as_unaligned_unchecked() };
+
+            let mut ptr = data_ptr(&data);
+            assert_eq!(slice(&mut data), ptr);
+
+            ptr = data_ptr(&aligned);
+            assert_eq!(slice(&mut aligned), ptr);
+
+            ptr = data_ptr(&unaligned);
+            assert_eq!(slice(&mut unaligned), ptr);
+        }
+
+        // Test initializing UnalignedVectors(Mut)?
+        #[test]
+        fn init_unaligned(mut data in unaligned_init_input()) {
+            let slice_ptr = NonNull::from(&data[..]);
+            let unaligned_raw = unsafe { UnalignedData::from_data_ptr(slice_ptr) };
+
+            let array_slice = unsafe { std::slice::from_raw_parts(
+                slice_ptr.cast::<VArray>().as_ptr(),
+                data.len() / V::LANES
+            ) };
+            let array_slice_ptr = NonNull::from(array_slice);
+
+            let mut unaligned = UnalignedData::<V>::from(&data[..]);
+            test_init(
+                array_slice_ptr,
+                unaligned_raw,
+                unaligned,
+                UnalignedStatic::empty(),
+                UnalignedStaticMut::empty(),
+            );
+            assert_eq!(unaligned.as_slice(), unaligned_raw);
+            unsafe {
+                // FIXME: Must meet preconditions first, do this via slice::align
+                //        then extract main test logic in a function that takes
+                //        &mut [VScalar] and recurse to that.
+                // assert_eq!(unaligned.as_aligned_unchecked(), unaligned_raw);
+                assert_eq!(unaligned.as_unaligned_unchecked(), unaligned_raw);
+            }
+
+            type UnalignedMut<'a> = UnalignedDataMut<'a, V>;
+            let mut unaligned_mut = UnalignedMut::from(&mut data[..]);
+            test_init(
+                array_slice_ptr,
+                unaligned_raw,
+                unaligned_mut,
+                UnalignedStatic::empty(),
+                UnalignedStaticMut::empty(),
+            );
+            unaligned_mut = UnalignedMut::from(&mut data[..]);
+            assert_eq!(unaligned_mut.as_slice(), unaligned_raw);
+            unsafe {
+                // FIXME: See above
+                // assert_eq!(aligned_mut.as_aligned_unchecked(), aligned_raw);
+                assert_eq!(UnalignedMut::from(&mut data[..]).as_unaligned_unchecked(), unaligned_raw);
+            }
+        }
+
+        // TODO: Test PaddedData(Mut)?, test moar ops
+    }
+
+    /* TODO: TO BE TESTED
+
+    impl<'target, V: VectorInfo> AlignedData<'target, V> {
+        /// Base pointer used by get_unchecked(idx)
+        ///
+        /// # Safety
+        ///
+        /// `idx` must be in range for the surrounding slice
+        #[inline(always)]
+        unsafe fn get_ptr(&self, idx: usize) -> NonNull<V> {
+            unsafe { NonNull::new_unchecked(self.0.as_ptr().add(idx)) }
+        }
+    }
+    //
+    impl<V: VectorInfo> PartialEq for AlignedData<'_, V> {
+        fn eq(&self, other: &Self) -> bool {
+            self.0 == other.0
+        }
+    }
+    //
+    impl<V: VectorInfo> PartialOrd for AlignedData<'_, V> {
+        fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+            self.0.partial_cmp(&other.0)
+        }
+    }
+    //
+    unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedData<'target, V> {
+        #[inline(always)]
+        unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
+            unsafe { *self.get_ptr(idx).as_ref() }
+        }
+    }
+    //
+    unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for AlignedData<'target, V> {
+        #[inline(always)]
+        unsafe fn split_at_unchecked(self, mid: usize, _len: usize) -> (Self, Self) {
+            let wrap = |ptr| Self(ptr, PhantomData);
+            (wrap(self.0), wrap(self.get_ptr(mid)))
+        }
+    }
+
+    + TODO also get_unchecked on arrays
+
+    */
+}
