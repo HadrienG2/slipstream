@@ -231,8 +231,8 @@ mod tests {
         assert!(ptr::eq(proxy.as_ref(), proxy.deref()));
         assert!(ptr::eq(proxy.as_ref(), proxy.deref_mut()));
 
-        // Check debug printout doesn't crash
-        format!("{proxy:?}");
+        // Check debug printout doesn't crash and produces non-empty output
+        assert_ne!(format!("{proxy:?}").len(), 0);
 
         // Check PartialEq with V
         assert_eq!(proxy, init);
