@@ -291,11 +291,17 @@ pub(crate) mod tests {
         V::assert_overaligned_array();
     }
 
+    prop_compose! {
+        pub(crate) fn any_v()(array in any::<VArray>()) -> V {
+            V::from(array)
+        }
+    }
+
     proptest! {
         #[test]
-        fn v_from_fn(input in any::<VArray>()) {
-            let output = V::from_fn(|idx| input[idx]);
-            assert_eq!(VArray::from(output), input);
+        fn v_from_fn(array in any::<VArray>()) {
+            let output = V::from_fn(|idx| array[idx]);
+            assert_eq!(VArray::from(output), array);
         }
     }
 }
