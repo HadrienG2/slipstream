@@ -1266,7 +1266,7 @@ pub(crate) mod tests {
             );
             assert_eq!(unaligned.as_slice(), unaligned_raw);
             unsafe {
-                // FIXME: Must meet preconditions first, do this via slice::align
+                // FIXME: Must meet preconditions first, do this via slice::align_mut
                 //        then extract main test logic in a function that takes
                 //        &mut [VScalar] and recurse to that.
                 // assert_eq!(unaligned.as_aligned_unchecked(), unaligned_raw);
@@ -1294,8 +1294,17 @@ pub(crate) mod tests {
         // TODO: Test PaddedData(Mut)?, test moar ops
     }
 
-    /* TODO: TO BE TESTED
+    /* TODO: Ops that still need testing
 
+    // Implemented for everything including AlignedArray
+    unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedData<'target, V> {
+        #[inline(always)]
+        unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
+            unsafe { *self.get_ptr(idx).as_ref() }
+        }
+    }
+
+    // Not implemented for *Mut and AlignedArray
     impl<'target, V: VectorInfo> AlignedData<'target, V> {
         /// Base pointer used by get_unchecked(idx)
         ///
@@ -1307,7 +1316,8 @@ pub(crate) mod tests {
             unsafe { NonNull::new_unchecked(self.0.as_ptr().add(idx)) }
         }
     }
-    //
+
+    // Not implemented for PaddedData(Mut)?
     impl<V: VectorInfo> PartialEq for AlignedData<'_, V> {
         fn eq(&self, other: &Self) -> bool {
             self.0 == other.0
@@ -1319,14 +1329,8 @@ pub(crate) mod tests {
             self.0.partial_cmp(&other.0)
         }
     }
-    //
-    unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedData<'target, V> {
-        #[inline(always)]
-        unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
-            unsafe { *self.get_ptr(idx).as_ref() }
-        }
-    }
-    //
+
+    // Not implemented for AlignedArray
     unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for AlignedData<'target, V> {
         #[inline(always)]
         unsafe fn split_at_unchecked(self, mid: usize, _len: usize) -> (Self, Self) {
@@ -1334,8 +1338,6 @@ pub(crate) mod tests {
             (wrap(self.0), wrap(self.get_ptr(mid)))
         }
     }
-
-    + TODO also get_unchecked on arrays
 
     */
 }
