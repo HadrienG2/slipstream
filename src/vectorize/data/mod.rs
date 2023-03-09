@@ -834,8 +834,12 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for PaddedData<'targe
 
     #[inline(always)]
     unsafe fn split_at_unchecked(mut self, mid: usize, len: usize) -> (Self, Self) {
-        if mid < len {
-            let left_last_vector = self.vectors.get_unchecked(mid, mid == len - 1);
+        if mid == 0 {
+            (Self::empty(), self)
+        } else if mid == len {
+            (self, Self::empty())
+        } else {
+            let left_last_vector = self.vectors.get_unchecked(mid - 1, mid == len);
             let (left_vectors, right_vectors) = self.vectors.split_at_unchecked(mid, len);
             let wrap = |vectors, last_vector| Self {
                 vectors,
@@ -845,8 +849,6 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for PaddedData<'targe
                 wrap(left_vectors, MaybeUninit::new(left_last_vector)),
                 wrap(right_vectors, self.last_vector),
             )
-        } else {
-            (self, Self::empty())
         }
     }
 }
@@ -972,8 +974,12 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for PaddedDataMut<'ta
 
     #[inline(always)]
     unsafe fn split_at_unchecked(self, mid: usize, len: usize) -> (Self, Self) {
-        if mid < len {
-            let left_num_last_elems = self.num_elems(mid == len - 1);
+        if mid == 0 {
+            (Self::empty(), self)
+        } else if mid == len {
+            (self, Self::empty())
+        } else {
+            let left_num_last_elems = self.num_elems(mid == len);
             let (left_inner, right_inner) = self.inner.split_at_unchecked(mid, len);
             let wrap = |inner, num_last_elems| Self {
                 inner,
@@ -984,8 +990,6 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for PaddedDataMut<'ta
                 wrap(left_inner, left_num_last_elems),
                 wrap(right_inner, self.num_last_elems),
             )
-        } else {
-            (self, Self::empty())
         }
     }
 }
@@ -1365,7 +1369,7 @@ pub(crate) mod tests {
     ///
     /// Use with variants of the input generation strategies that _don't_ allow
     /// empty or invalid datasets to be generated.
-    pub(crate) fn with_valid_index<Data: SimdData>(
+    pub(crate) fn with_data_index<Data: SimdData>(
         data: Data,
     ) -> impl Strategy<Value = (Data, usize)> {
         let simd_len = data.simd_len();
@@ -1374,6 +1378,15 @@ pub(crate) mod tests {
             "Don't set allow_empty to true when you want to index"
         );
         (Just(data), 0..simd_len)
+    }
+
+    /// Complement an existing SIMD dataset generation Strategy with an index
+    /// that's suitable for splitting (in range + 1-past-the-end)
+    pub(crate) fn with_split_index<Data: SimdData>(
+        data: Data,
+    ) -> impl Strategy<Value = (Data, usize)> {
+        let simd_len = data.simd_len();
+        (Just(data), 0..=simd_len)
     }
 
     // === TESTS FOR THIS MODULE ===
@@ -1738,7 +1751,7 @@ pub(crate) mod tests {
 
         /// Test the get_unchecked and get_ptr of AlignedData
         #[test]
-        fn get_aligned((data, idx) in aligned_init_input(false).prop_flat_map(with_valid_index)) {
+        fn get_aligned((data, idx) in aligned_init_input(false).prop_flat_map(with_data_index)) {
             let elem = data.simd_element(idx);
             let base_ptr = data.base_ptr();
             let is_last = data.is_last(idx);
@@ -1752,7 +1765,7 @@ pub(crate) mod tests {
 
         /// Test treating arrays as shared slices
         #[test]
-        fn get_array((mut data, idx) in any_aligned_array().prop_flat_map(with_valid_index)) {
+        fn get_array((mut data, idx) in any_aligned_array().prop_flat_map(with_data_index)) {
             let elem = data.simd_element(idx);
             let is_last = data.is_last(idx);
             assert_eq!(unsafe { VectorizedImpl::get_unchecked(&mut data, idx, is_last) },
@@ -1763,7 +1776,7 @@ pub(crate) mod tests {
         #[test]
         fn get_aligned_mut(
             ((mut data, idx), new_elem) in (aligned_init_input(false)
-                                                .prop_flat_map(with_valid_index),
+                                                .prop_flat_map(with_data_index),
                                             any_v())
         ) {
             let elem = data.simd_element(idx);
@@ -1779,7 +1792,7 @@ pub(crate) mod tests {
 
         /// Test the get_unchecked and get_ptr of UnalignedData
         #[test]
-        fn get_unaligned((data, idx) in unaligned_init_input(V::LANES).prop_flat_map(with_valid_index)) {
+        fn get_unaligned((data, idx) in unaligned_init_input(V::LANES).prop_flat_map(with_data_index)) {
             let elem = data.simd_element(idx);
             let base_ptr = data.base_ptr();
             let is_last = data.is_last(idx);
@@ -1795,7 +1808,7 @@ pub(crate) mod tests {
         #[test]
         fn get_unaligned_mut(
             ((mut data, idx), new_elem) in (unaligned_init_input(V::LANES)
-                                                .prop_flat_map(with_valid_index),
+                                                .prop_flat_map(with_data_index),
                                             any_v())
         ) {
             let elem = data.simd_element(idx);
@@ -1811,7 +1824,7 @@ pub(crate) mod tests {
 
         /// Test the get_unchecked and get_ptr of PaddedData
         #[test]
-        fn get_padded((padded_data, idx) in padded_init_input(false).prop_flat_map(with_valid_index)) {
+        fn get_padded((padded_data, idx) in padded_init_input(false).prop_flat_map(with_data_index)) {
             let elem = padded_data.simd_element(idx);
             let base_ptr = padded_data.base_ptr();
             let is_last = padded_data.is_last(idx);
@@ -1828,7 +1841,7 @@ pub(crate) mod tests {
         #[test]
         fn get_padded_mut(
             ((mut padded_data, idx), new_elem) in (padded_init_input(false)
-                                                        .prop_flat_map(with_valid_index),
+                                                        .prop_flat_map(with_data_index),
                                                    any_v())
         ) {
             let elem = padded_data.simd_element(idx);
@@ -1861,7 +1874,7 @@ pub(crate) mod tests {
 
         /// Test the get_unchecked of TupleData
         #[test]
-        fn get_tuple((mut data, idx) in tuple_init_input(false).prop_flat_map(with_valid_index)) {
+        fn get_tuple((mut data, idx) in tuple_init_input(false).prop_flat_map(with_data_index)) {
             let elem = data.simd_element(idx);
             let is_last = data.is_last(idx);
             {
@@ -1888,6 +1901,155 @@ pub(crate) mod tests {
             assert_eq!(new_elem.4, elem.4);
             assert_ne!(new_elem.5, elem.5);
         }
+
+        /// Test the split_at_unchecked of AlignedData(Mut)?
+        #[test]
+        fn split_aligned((mut data, mid) in aligned_init_input(false).prop_flat_map(with_split_index)) {
+            let base_ptr = data.base_ptr();
+            let len = data.simd_len();
+            let is_end = mid == len;
+            let nonnull = |ptr| NonNull::new(ptr).unwrap();
+
+            {
+                let aligned = AlignedV::from(data.as_slice());
+                let (lhs, rhs) = unsafe { aligned.split_at_unchecked(mid, len) };
+                assert_eq!(lhs, base_ptr);
+                if !is_end {
+                    assert_eq!(rhs, nonnull(base_ptr.as_ptr().wrapping_add(mid)));
+                }
+            }
+
+            {
+                let aligned_mut = AlignedVMut::from(data.as_mut_slice());
+                let (lhs, rhs) = unsafe { aligned_mut.split_at_unchecked(mid, len) };
+                assert_eq!(lhs, base_ptr);
+                if !is_end {
+                    assert_eq!(rhs, nonnull(base_ptr.as_ptr().wrapping_add(mid)));
+                }
+            }
+        }
+
+        /// Test the split_at_unchecked of UnalignedData(Mut)?
+        #[test]
+        fn split_unaligned((mut data, mid) in unaligned_init_input(V::LANES).prop_flat_map(with_split_index)) {
+            let base_ptr = data.base_ptr();
+            let len = data.simd_len();
+            let is_end = mid == len;
+            let nonnull = |ptr| NonNull::new(ptr).unwrap();
+
+            {
+                let unaligned = UnalignedV::from(data.as_slice());
+                let (lhs, rhs) = unsafe { unaligned.split_at_unchecked(mid, len) };
+                assert_eq!(lhs, base_ptr);
+                if !is_end {
+                    assert_eq!(rhs, nonnull(base_ptr.as_ptr().wrapping_add(mid)));
+                }
+            }
+
+            {
+                let unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
+                let (lhs, rhs) = unsafe { unaligned_mut.split_at_unchecked(mid, len) };
+                assert_eq!(lhs, base_ptr);
+                if !is_end {
+                    assert_eq!(rhs, nonnull(base_ptr.as_ptr().wrapping_add(mid)));
+                }
+            }
+        }
+
+        /// Test the split_at_unchecked of PaddedData(Mut)?
+        #[test]
+        fn split_padded((padded_data, mid) in padded_init_input(false).prop_flat_map(with_split_index)) {
+            let elem_before_mid = padded_data.simd_element(mid.saturating_sub(1));
+            let base_ptr = padded_data.base_ptr();
+            let len = padded_data.simd_len();
+            let nonnull = |ptr| NonNull::new(ptr).unwrap();
+
+            let check_padded_split = |lhs: &PaddedV, rhs: &PaddedV, last_vector: V| {
+                if mid != 0 {
+                    assert_eq!(lhs.vectors, base_ptr);
+                }
+                if mid != len {
+                    assert_eq!(rhs.vectors, nonnull(base_ptr.as_ptr().wrapping_add(mid)));
+                }
+
+                if mid != 0 && mid != len {
+                    assert_eq!(
+                        unsafe { lhs.last_vector.assume_init() },
+                        elem_before_mid,
+                    );
+                    assert_eq!(
+                        unsafe { rhs.last_vector.assume_init() },
+                        last_vector,
+                    );
+                } else if mid == 0 {
+                    assert_eq!(
+                        unsafe { rhs.last_vector.assume_init() },
+                        last_vector,
+                    );
+                } else if mid == len {
+                    assert_eq!(
+                        unsafe { lhs.last_vector.assume_init() },
+                        last_vector,
+                    );
+                }
+            };
+
+            let num_last_elems = {
+                let (data, padding) = &padded_data;
+                let (padded, num_last_elems) = PaddedV::new(data.as_slice(), *padding).unwrap();
+                let last_vector = unsafe { padded.last_vector.assume_init() };
+                let (lhs, rhs) = unsafe { padded.split_at_unchecked(mid, len) };
+                check_padded_split(&lhs, &rhs, last_vector);
+                num_last_elems
+            };
+
+            {
+                let (mut data, padding) = padded_data;
+                let padded_mut = PaddedVMut::new(data.as_mut_slice(), padding).unwrap();
+                let last_vector = unsafe { padded_mut.inner.last_vector.assume_init() };
+                let (lhs, rhs) = unsafe { padded_mut.split_at_unchecked(mid, len) };
+                check_padded_split(&lhs.inner, &rhs.inner, last_vector);
+                if mid > 0 && mid < len {
+                    assert_eq!(lhs.num_last_elems, V::LANES);
+                    assert_eq!(rhs.num_last_elems, num_last_elems);
+                } else if mid == 0 {
+                    assert_eq!(lhs.num_last_elems, 0);
+                    assert_eq!(rhs.num_last_elems, num_last_elems);
+                } else if mid == len {
+                    assert_eq!(lhs.num_last_elems, num_last_elems);
+                    assert_eq!(rhs.num_last_elems, 0);
+                }
+            }
+        }
+
+        /// Test the split_at_unchecked of TupleData
+        #[test]
+        fn split_tuple((mut data, mid) in tuple_init_input(false).prop_flat_map(with_split_index)) {
+            let base_ptr = data.base_ptr();
+            let len = data.simd_len();
+            let tuple = data.as_tuple_data();
+            let (lhs, rhs) = unsafe { tuple.split_at_unchecked(mid, len) };
+            if mid != 0 {
+                assert_eq!(lhs.0, base_ptr.0);
+                assert_eq!(lhs.1, base_ptr.1);
+                assert_eq!(lhs.2, base_ptr.2);
+                assert_eq!(lhs.3, base_ptr.3);
+                assert_eq!(lhs.4.vectors, base_ptr.4);
+                assert_eq!(lhs.5.inner.vectors, base_ptr.5);
+            }
+            if mid != len {
+                let nonnull_v = |ptr: *mut V| NonNull::new(ptr).unwrap();
+                let nonnull_array = |ptr: *mut VArray| NonNull::new(ptr).unwrap();
+                assert_eq!(rhs.0, nonnull_v(base_ptr.0.as_ptr().wrapping_add(mid)));
+                assert_eq!(rhs.1, nonnull_v(base_ptr.1.as_ptr().wrapping_add(mid)));
+                assert_eq!(rhs.2, nonnull_array(base_ptr.2.as_ptr().wrapping_add(mid)));
+                assert_eq!(rhs.3, nonnull_array(base_ptr.3.as_ptr().wrapping_add(mid)));
+                assert_eq!(rhs.4.vectors, nonnull_array(base_ptr.4.as_ptr().wrapping_add(mid)));
+                assert_eq!(rhs.5.inner.vectors, nonnull_array(base_ptr.5.as_ptr().wrapping_add(mid)));
+            }
+        }
+
+        // TODO: PartialEq + PartialOrd: aligned, unaligned, padded, tuple
     }
 
     /* TODO: Ops that still need testing
@@ -1902,15 +2064,6 @@ pub(crate) mod tests {
     impl<V: VectorInfo> PartialOrd for AlignedData<'_, V> {
         fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
             self.0.partial_cmp(&other.0)
-        }
-    }
-
-    // Not implemented for AlignedArray
-    unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for AlignedData<'target, V> {
-        #[inline(always)]
-        unsafe fn split_at_unchecked(self, mid: usize, _len: usize) -> (Self, Self) {
-            let wrap = |ptr| Self(ptr, PhantomData);
-            (wrap(self.0), wrap(self.get_ptr(mid)))
         }
     }
 
