@@ -1144,6 +1144,22 @@ pub(crate) mod tests {
         padded_mut: Vec<VScalar>,
         padding: VScalar,
     }
+    //
+    impl TupleInitInput {
+        /// Construct TupleData from this
+        pub fn as_tuple_data(&mut self) -> TupleData {
+            (
+                AlignedV::from(self.aligned.as_slice()),
+                AlignedVMut::from(self.aligned_mut.as_mut_slice()),
+                UnalignedV::from(self.unaligned.as_slice()),
+                UnalignedVMut::from(self.unaligned_mut.as_mut_slice()),
+                PaddedV::new(self.padded.as_slice(), Some(self.padding))
+                    .unwrap()
+                    .0,
+                PaddedVMut::new(self.padded_mut.as_mut_slice(), Some(self.padding)).unwrap(),
+            )
+        }
+    }
 
     /// Generate the building blocks to initialize TupleData
     pub(crate) fn tuple_init_input() -> impl Strategy<Value = TupleInitInput> {
@@ -1539,14 +1555,7 @@ pub(crate) mod tests {
             let padded_base = NonNull::from(init.padded.as_slice()).cast::<VArray>();
             let padded_mut_base = NonNull::from(init.padded_mut.as_mut_slice()).cast::<VArray>();
 
-            let mut tuple: TupleData = (
-                AlignedV::from(init.aligned.as_slice()),
-                AlignedVMut::from(init.aligned_mut.as_mut_slice()),
-                UnalignedV::from(init.unaligned.as_slice()),
-                UnalignedVMut::from(init.unaligned_mut.as_mut_slice()),
-                PaddedV::new(init.padded.as_slice(), Some(init.padding)).unwrap().0,
-                PaddedVMut::new(init.padded_mut.as_mut_slice(), Some(init.padding)).unwrap(),
-            );
+            let mut tuple = init.as_tuple_data();
 
             {
                 let slice = tuple.as_slice();
