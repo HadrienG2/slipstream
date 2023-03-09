@@ -1089,8 +1089,8 @@ pub(crate) mod tests {
     const MAX_SIMD_LEN: usize = 4;
 
     /// Generate the building blocks to initialize AlignedData(Mut)?
-    pub(crate) fn aligned_init_input() -> impl Strategy<Value = Vec<V>> {
-        prop::collection::vec(any_v(), 0..=MAX_SIMD_LEN)
+    pub(crate) fn aligned_init_input(allow_empty: bool) -> impl Strategy<Value = Vec<V>> {
+        prop::collection::vec(any_v(), ((!allow_empty) as usize)..=MAX_SIMD_LEN)
     }
 
     /// Arbitrary array of aligned data
@@ -1100,13 +1100,22 @@ pub(crate) mod tests {
     }
 
     /// Generate the building blocks to initialize UnalignedData(Mut)?
-    pub(crate) fn unaligned_init_input() -> impl Strategy<Value = Vec<VScalar>> {
-        prop::collection::vec(any::<VScalar>(), 0..=MAX_SIMD_LEN * V::LANES)
+    pub(crate) fn unaligned_init_input(min_scalars: usize) -> impl Strategy<Value = Vec<VScalar>> {
+        prop::collection::vec(any::<VScalar>(), min_scalars..=MAX_SIMD_LEN * V::LANES)
     }
 
     /// Generate the building blocks to initialize PaddedData(Mut)?
-    pub(crate) fn padded_init_input() -> impl Strategy<Value = (Vec<VScalar>, Option<VScalar>)> {
-        (unaligned_init_input(), any::<Option<VScalar>>())
+    pub(crate) fn padded_init_input(
+        allow_empty: bool,
+    ) -> impl Strategy<Value = (Vec<VScalar>, Option<VScalar>)> {
+        (
+            unaligned_init_input(!allow_empty as usize),
+            if allow_empty {
+                any::<Option<VScalar>>().boxed()
+            } else {
+                any::<VScalar>().prop_map(Some).boxed()
+            },
+        )
     }
 
     // V-based typedefs to reduce inference issues
@@ -1131,7 +1140,7 @@ pub(crate) mod tests {
     ///
     /// Satisfies the extra invariant that all inner containers must have the
     /// same SIMD length, denoted `simd_len` in the following.
-    #[derive(Debug)]
+    #[derive(Clone, Debug, PartialEq)]
     pub(crate) struct TupleInitInput {
         // Length == `simd_len`
         aligned: Vec<V>,
@@ -1162,8 +1171,8 @@ pub(crate) mod tests {
     }
 
     /// Generate the building blocks to initialize TupleData
-    pub(crate) fn tuple_init_input() -> impl Strategy<Value = TupleInitInput> {
-        (0..=MAX_SIMD_LEN)
+    pub(crate) fn tuple_init_input(allow_empty: bool) -> impl Strategy<Value = TupleInitInput> {
+        (((!allow_empty) as usize)..=MAX_SIMD_LEN)
             .prop_flat_map(|simd_len| {
                 let aligned = || prop::collection::vec(any_v(), simd_len);
                 let scalar_len = simd_len * V::LANES;
@@ -1199,9 +1208,177 @@ pub(crate) mod tests {
             )
     }
 
+    /// Query some properties of SIMD data (as built above)
+    pub(crate) trait SimdData: Clone + Debug {
+        // Base pointer (can be used to check if two things target the same allocation
+        type BasePtr: Copy + Debug + Eq + Hash;
+        fn base_ptr(&self) -> Self::BasePtr;
+
+        // Number of SIMD vectors that can be read using get_unchecked
+        fn simd_len(&self) -> usize;
+
+        // Truth that one element is the last one
+        fn is_last(&self, idx: usize) -> bool {
+            idx == self.simd_len() - 1
+        }
+
+        // Read the N-th SIMD vector (or tuple of vectors)
+        type Element;
+        fn simd_element(&self, idx: usize) -> Self::Element;
+    }
+    //
+    impl SimdData for Vec<V> {
+        type BasePtr = NonNull<V>;
+        fn base_ptr(&self) -> NonNull<V> {
+            NonNull::from(self.as_slice()).cast::<V>()
+        }
+
+        fn simd_len(&self) -> usize {
+            self.len()
+        }
+
+        type Element = V;
+        fn simd_element(&self, idx: usize) -> V {
+            self[idx]
+        }
+    }
+    //
+    impl<const N: usize> SimdData for [V; N] {
+        type BasePtr = NonNull<V>;
+        fn base_ptr(&self) -> NonNull<V> {
+            NonNull::from(self.as_slice()).cast::<V>()
+        }
+
+        fn simd_len(&self) -> usize {
+            self.len()
+        }
+
+        type Element = V;
+        fn simd_element(&self, idx: usize) -> V {
+            self[idx]
+        }
+    }
+    //
+    impl SimdData for Vec<VScalar> {
+        type BasePtr = NonNull<VArray>;
+        fn base_ptr(&self) -> NonNull<VArray> {
+            NonNull::from(self.as_slice()).cast::<VArray>()
+        }
+
+        fn simd_len(&self) -> usize {
+            self.len() / V::LANES
+        }
+
+        type Element = V;
+        fn simd_element(&self, idx: usize) -> V {
+            let base = idx * V::LANES;
+            V::new(&self[base..base + V::LANES])
+        }
+    }
+    //
+    impl SimdData for (&Vec<VScalar>, Option<VScalar>) {
+        type BasePtr = NonNull<VArray>;
+
+        fn base_ptr(&self) -> NonNull<VArray> {
+            self.0.base_ptr()
+        }
+
+        fn simd_len(&self) -> usize {
+            let mut result = self.0.simd_len();
+            if self.0.len() % V::LANES != 0 {
+                assert_ne!(self.1, None);
+                result += 1;
+            }
+            result
+        }
+
+        type Element = V;
+        fn simd_element(&self, idx: usize) -> V {
+            let base = idx * V::LANES;
+            V::from_fn(|offset| {
+                let idx = base + offset;
+                if idx < self.0.len() {
+                    self.0[idx]
+                } else {
+                    self.1.unwrap()
+                }
+            })
+        }
+    }
+    //
+    impl SimdData for (Vec<VScalar>, Option<VScalar>) {
+        type BasePtr = NonNull<VArray>;
+        fn base_ptr(&self) -> NonNull<VArray> {
+            (&self.0, self.1).base_ptr()
+        }
+
+        fn simd_len(&self) -> usize {
+            (&self.0, self.1).simd_len()
+        }
+
+        type Element = V;
+        fn simd_element(&self, idx: usize) -> V {
+            (&self.0, self.1).simd_element(idx)
+        }
+    }
+    //
+    impl SimdData for TupleInitInput {
+        type BasePtr = (
+            NonNull<V>,
+            NonNull<V>,
+            NonNull<VArray>,
+            NonNull<VArray>,
+            NonNull<VArray>,
+            NonNull<VArray>,
+        );
+
+        fn base_ptr(&self) -> Self::BasePtr {
+            (
+                self.aligned.base_ptr(),
+                self.aligned_mut.base_ptr(),
+                self.unaligned.base_ptr(),
+                self.unaligned_mut.base_ptr(),
+                self.padded.base_ptr(),
+                self.padded_mut.base_ptr(),
+            )
+        }
+
+        fn simd_len(&self) -> usize {
+            self.aligned.len()
+        }
+
+        type Element = (V, V, V, V, V, V);
+        fn simd_element(&self, idx: usize) -> Self::Element {
+            (
+                self.aligned.simd_element(idx),
+                self.aligned_mut.simd_element(idx),
+                self.unaligned.simd_element(idx),
+                self.unaligned_mut.simd_element(idx),
+                (&self.padded, Some(self.padding)).simd_element(idx),
+                (&self.padded_mut, Some(self.padding)).simd_element(idx),
+            )
+        }
+    }
+
+    /// Complement an existing SIMD dataset generation Strategy with an index
+    /// that's in range (use with prop_flat_map)
+    ///
+    /// Use with variants of the input generation strategies that _don't_ allow
+    /// empty datasets to be generated.
+    pub(crate) fn with_valid_index<Data: SimdData>(
+        data: Data,
+    ) -> impl Strategy<Value = (Data, usize)> {
+        let simd_len = data.simd_len();
+        assert_ne!(
+            simd_len, 0,
+            "Don't set allow_empty to true when you want to index"
+        );
+        (Just(data), 0..simd_len)
+    }
+
     // === TESTS FOR THIS MODULE ===
 
-    // Hash a value
+    /// Hash a value
     fn hash<T: Hash>(t: &T) -> u64 {
         let mut s = DefaultHasher::new();
         t.hash(&mut s);
@@ -1261,7 +1438,7 @@ pub(crate) mod tests {
         );
     }
 
-    // Test properties of a freshly initialized data pointer
+    /// Test properties of a freshly initialized data pointer
     fn test_init<
         Target,
         DataFromRaw: Borrow<NonNull<Target>> + Debug,
@@ -1325,9 +1502,9 @@ pub(crate) mod tests {
     }
 
     proptest! {
-        // Test freshly initialized AlignedData(Mut)?
+        /// Test freshly initialized AlignedData(Mut)?
         #[test]
-        fn init_aligned(mut data in aligned_init_input()) {
+        fn init_aligned(mut data in aligned_init_input(true)) {
             let slice_ptr = NonNull::from(data.as_slice());
             let aligned_raw = unsafe { AlignedData::from_data_ptr(slice_ptr) };
 
@@ -1363,7 +1540,7 @@ pub(crate) mod tests {
             }
         }
 
-        // Test treating arrays as shared slices
+        /// Test treating arrays as shared slices
         #[test]
         fn init_array(mut data in any_aligned_array()) {
             let data_ptr = |data: &AlignedArray| NonNull::from(data).cast::<V>();
@@ -1382,9 +1559,9 @@ pub(crate) mod tests {
             assert_eq!(slice(&mut unaligned), ptr);
         }
 
-        // Test freshly initialized UnalignedData(Mut)?
+        /// Test freshly initialized UnalignedData(Mut)?
         #[test]
-        fn init_unaligned(mut data in unaligned_init_input()) {
+        fn init_unaligned(mut data in unaligned_init_input(0)) {
             let slice_ptr = NonNull::from(data.as_slice());
             let unaligned_raw = unsafe { UnalignedV::from_data_ptr(slice_ptr) };
             let array_slice = unsafe { std::slice::from_raw_parts(
@@ -1425,9 +1602,9 @@ pub(crate) mod tests {
             }
         }
 
-        // Test freshly initialized PaddedData(Mut)?
+        /// Test freshly initialized PaddedData(Mut)?
         #[test]
-        fn init_padded((mut data, padding) in padded_init_input()) {
+        fn init_padded((mut data, padding) in padded_init_input(true)) {
             // Padding is required if data length is not divisible by V::LANES.
             // In that case, constructor should error out if it's not present.
             if (data.len() % V::LANES != 0) && (padding == None) {
@@ -1542,54 +1719,177 @@ pub(crate) mod tests {
             }
         }
 
-        // Test freshly initialized TupleData
+        /// Test freshly initialized TupleData
         #[test]
-        fn init_tuple(mut init in tuple_init_input()) {
-            let aligned_base = NonNull::from(init.aligned.as_slice()).cast::<V>();
-            let aligned_mut_base = NonNull::from(init.aligned_mut.as_mut_slice()).cast::<V>();
-            let unaligned_base = NonNull::from(init.unaligned.as_slice()).cast::<VArray>();
-            let unaligned_mut_base = NonNull::from(init.unaligned_mut.as_mut_slice()).cast::<VArray>();
-            let padded_base = NonNull::from(init.padded.as_slice()).cast::<VArray>();
-            let padded_mut_base = NonNull::from(init.padded_mut.as_mut_slice()).cast::<VArray>();
-
+        fn init_tuple(mut init in tuple_init_input(true)) {
+            let base = init.base_ptr();
             let mut tuple = init.as_tuple_data();
 
             {
                 let slice = tuple.as_slice();
-                assert_eq!(slice.0, aligned_base);
-                assert_eq!(slice.1, aligned_mut_base);
-                assert_eq!(slice.2, unaligned_base);
-                assert_eq!(slice.3, unaligned_mut_base);
-                assert_eq!(slice.4.vectors, padded_base);
-                assert_eq!(slice.5.inner.vectors, padded_mut_base);
+                assert_eq!(slice.0, base.0);
+                assert_eq!(slice.1, base.1);
+                assert_eq!(slice.2, base.2);
+                assert_eq!(slice.3, base.3);
+                assert_eq!(slice.4.vectors, base.4);
+                assert_eq!(slice.5.inner.vectors, base.5);
             }
+        }
+
+        /// Test the get_unchecked and get_ptr of AlignedData
+        #[test]
+        fn get_aligned((data, idx) in aligned_init_input(false).prop_flat_map(with_valid_index)) {
+            let elem = data.simd_element(idx);
+            let base_ptr = data.base_ptr();
+            let is_last = data.is_last(idx);
+            {
+                let mut aligned = AlignedV::from(data.as_slice());
+                assert_eq!(unsafe { aligned.get_ptr(idx) }.as_ptr(),
+                           base_ptr.as_ptr().wrapping_add(idx));
+                assert_eq!(unsafe { aligned.get_unchecked(idx, is_last) }, elem);
+            }
+        }
+
+        /// Test treating arrays as shared slices
+        #[test]
+        fn get_array((mut data, idx) in any_aligned_array().prop_flat_map(with_valid_index)) {
+            let elem = data.simd_element(idx);
+            let is_last = data.is_last(idx);
+            assert_eq!(unsafe { VectorizedImpl::get_unchecked(&mut data, idx, is_last) },
+                       elem);
+        }
+
+        /// Test the get_unchecked of AlignedDataMut
+        fn get_aligned_mut(
+            ((mut data, idx), new_elem) in (aligned_init_input(false)
+                                                .prop_flat_map(with_valid_index),
+                                            any_v())
+        ) {
+            let elem = data.simd_element(idx);
+            let is_last = data.is_last(idx);
+            {
+                let mut aligned_mut = AlignedVMut::from(data.as_mut_slice());
+                let elem_ref = unsafe { aligned_mut.get_unchecked(idx, is_last) };
+                assert_eq!(*elem_ref, elem);
+                *elem_ref = new_elem;
+            }
+            assert_eq!(data.simd_element(idx), new_elem);
+        }
+
+        /// Test the get_unchecked and get_ptr of UnalignedData
+        #[test]
+        fn get_unaligned((data, idx) in unaligned_init_input(V::LANES).prop_flat_map(with_valid_index)) {
+            let elem = data.simd_element(idx);
+            let base_ptr = data.base_ptr();
+            let is_last = data.is_last(idx);
+            {
+                let mut unaligned = UnalignedV::from(data.as_slice());
+                assert_eq!(unsafe { unaligned.get_ptr(idx) }.as_ptr(),
+                           base_ptr.as_ptr().wrapping_add(idx));
+                assert_eq!(unsafe { unaligned.get_unchecked(idx, is_last) }, elem);
+            }
+        }
+
+        /// Test the get_unchecked of UnalignedDataMut
+        fn get_unaligned_mut(
+            ((mut data, idx), new_elem) in (unaligned_init_input(V::LANES)
+                                                .prop_flat_map(with_valid_index),
+                                            any_v())
+        ) {
+            let elem = data.simd_element(idx);
+            let is_last = data.is_last(idx);
+            {
+                let mut unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
+                let mut elem_ref = unsafe { unaligned_mut.get_unchecked(idx, is_last) };
+                assert_eq!(*elem_ref, elem);
+                *elem_ref = new_elem;
+            }
+            assert_eq!(data.simd_element(idx), new_elem);
+        }
+
+        /// Test the get_unchecked and get_ptr of PaddedData
+        #[test]
+        fn get_padded((padded_data, idx) in padded_init_input(false).prop_flat_map(with_valid_index)) {
+            let elem = padded_data.simd_element(idx);
+            let base_ptr = padded_data.base_ptr();
+            let is_last = padded_data.is_last(idx);
+            {
+                let (data, padding) = padded_data;
+                let mut padded = PaddedV::new(data.as_slice(), padding).unwrap().0;
+                assert_eq!(unsafe { padded.get_ptr(idx) }.as_ptr(),
+                           base_ptr.as_ptr().wrapping_add(idx));
+                assert_eq!(unsafe { padded.get_unchecked(idx, is_last) }, elem);
+            }
+        }
+
+        /// Test the get_unchecked of PaddedDataMut
+        fn get_padded_mut(
+            ((mut padded_data, idx), new_elem) in (padded_init_input(false)
+                                                        .prop_flat_map(with_valid_index),
+                                                   any_v())
+        ) {
+            let elem = padded_data.simd_element(idx);
+            let is_last = padded_data.is_last(idx);
+
+            let mut num_last_elems = padded_data.0.len() % V::LANES;
+            if num_last_elems == 0 {
+                num_last_elems = V::LANES;
+            }
+
+            {
+                let (data, padding) = &mut padded_data;
+                let mut padded_mut = PaddedVMut::new(data.as_mut_slice(), *padding).unwrap();
+                let mut elem_ref = unsafe { padded_mut.get_unchecked(idx, is_last) };
+                assert_eq!(*elem_ref, elem);
+                *elem_ref = new_elem;
+            }
+
+            assert_eq!(
+                padded_data.simd_element(idx),
+                V::from_fn(|i| {
+                    if i < num_last_elems {
+                        new_elem[i]
+                    } else {
+                        padded_data.1.unwrap()
+                    }
+                })
+            );
+        }
+
+        /// Test the get_unchecked of TupleData
+        #[test]
+        fn get_tuple((mut data, idx) in tuple_init_input(false).prop_flat_map(with_valid_index)) {
+            let elem = data.simd_element(idx);
+            let is_last = data.is_last(idx);
+            {
+                let mut tuple = data.as_tuple_data();
+                let (
+                    aligned_val,
+                    aligned_mut,
+                    unaligned_val,
+                    mut unaligned_mut,
+                    padded_val,
+                    mut padded_mut
+                ) = unsafe { tuple.get_unchecked(idx, is_last) };
+                let readout = (aligned_val, *aligned_mut, unaligned_val, *unaligned_mut, padded_val, *padded_mut);
+                assert_eq!(readout, elem);
+                *aligned_mut = !elem.1;
+                *unaligned_mut = !elem.3;
+                *padded_mut = !elem.5;
+            }
+            let new_elem = data.simd_element(idx);
+            assert_eq!(new_elem.0, elem.0);
+            assert_ne!(new_elem.1, elem.1);
+            assert_eq!(new_elem.2, elem.2);
+            assert_ne!(new_elem.3, elem.3);
+            assert_eq!(new_elem.4, elem.4);
+            assert_ne!(new_elem.5, elem.5);
         }
     }
 
     /* TODO: Ops that still need testing
 
-    // Implemented for everything including AlignedArray
-    unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedData<'target, V> {
-        #[inline(always)]
-        unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
-            unsafe { *self.get_ptr(idx).as_ref() }
-        }
-    }
-
-    // Not implemented for *Mut and AlignedArray
-    impl<'target, V: VectorInfo> AlignedData<'target, V> {
-        /// Base pointer used by get_unchecked(idx)
-        ///
-        /// # Safety
-        ///
-        /// `idx` must be in range for the surrounding slice
-        #[inline(always)]
-        unsafe fn get_ptr(&self, idx: usize) -> NonNull<V> {
-            unsafe { NonNull::new_unchecked(self.0.as_ptr().add(idx)) }
-        }
-    }
-
-    // Not implemented for PaddedData(Mut)?
+    // Not implemented for PaddedData(Mut)?, not manually implemented for AlignedArray
     impl<V: VectorInfo> PartialEq for AlignedData<'_, V> {
         fn eq(&self, other: &Self) -> bool {
             self.0 == other.0
