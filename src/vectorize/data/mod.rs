@@ -1199,9 +1199,6 @@ pub(crate) mod tests {
             )
     }
 
-    // TODO: Generate the building blocks to build a tuple of all supported data
-    //       types with homogeneous length.
-
     // === TESTS FOR THIS MODULE ===
 
     // Hash a value
