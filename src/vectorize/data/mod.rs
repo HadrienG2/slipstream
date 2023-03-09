@@ -585,7 +585,7 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for UnalignedData<'ta
 //
 // Base pointer of an unaligned `&mut [Vector]` slice, tagged with lifetime
 // information. Built out of a `&mut [Scalar]` slice. Usable length is
-// the number of complete SIMD vectors within the underlying scalar slice.
+// the number of **complete** SIMD vectors within the underlying scalar slice.
 pub struct UnalignedDataMut<'target, V: VectorInfo>(
     UnalignedData<'target, V>,
     PhantomData<&'target mut [V]>,
@@ -1109,6 +1109,80 @@ pub(crate) mod tests {
         (unaligned_init_input(), any::<Option<VScalar>>())
     }
 
+    // V-based typedefs to reduce inference issues
+    type AlignedV<'a> = AlignedData<'a, V>;
+    type AlignedVMut<'a> = AlignedDataMut<'a, V>;
+    type UnalignedV<'a> = UnalignedData<'a, V>;
+    type UnalignedVMut<'a> = UnalignedDataMut<'a, V>;
+    type PaddedV<'a> = PaddedData<'a, V>;
+    type PaddedVMut<'a> = PaddedDataMut<'a, V>;
+
+    /// Tuple of most supported entities, for exhaustive tests
+    pub(crate) type TupleData<'a> = (
+        AlignedV<'a>,
+        AlignedVMut<'a>,
+        UnalignedV<'a>,
+        UnalignedVMut<'a>,
+        PaddedV<'a>,
+        PaddedVMut<'a>,
+    );
+
+    /// Building blocks needed to initialize TupleData
+    ///
+    /// Satisfies the extra invariant that all inner containers must have the
+    /// same SIMD length, denoted `simd_len` in the following.
+    #[derive(Debug)]
+    pub(crate) struct TupleInitInput {
+        // Length == `simd_len`
+        aligned: Vec<V>,
+        aligned_mut: Vec<V>,
+        // Length == `simd_len * V::LANES`
+        unaligned: Vec<VScalar>,
+        unaligned_mut: Vec<VScalar>,
+        // `(simd_len - 1) * V::LANES` < Length < `simd_len * V::LANES` or Length == 0
+        padded: Vec<VScalar>,
+        padded_mut: Vec<VScalar>,
+        padding: VScalar,
+    }
+
+    /// Generate the building blocks to initialize TupleData
+    pub(crate) fn tuple_init_input() -> impl Strategy<Value = TupleInitInput> {
+        (0..=MAX_SIMD_LEN)
+            .prop_flat_map(|simd_len| {
+                let aligned = || prop::collection::vec(any_v(), simd_len);
+                let scalar_len = simd_len * V::LANES;
+                let unaligned = || prop::collection::vec(any::<VScalar>(), scalar_len);
+                let padded = || {
+                    prop::collection::vec(
+                        any::<VScalar>(),
+                        scalar_len.saturating_sub(V::LANES - 1)..=scalar_len.saturating_sub(1),
+                    )
+                };
+                (
+                    aligned(),
+                    aligned(),
+                    unaligned(),
+                    unaligned(),
+                    padded(),
+                    padded(),
+                    any::<VScalar>(),
+                )
+            })
+            .prop_map(
+                |(aligned, aligned_mut, unaligned, unaligned_mut, padded, padded_mut, padding)| {
+                    TupleInitInput {
+                        aligned,
+                        aligned_mut,
+                        unaligned,
+                        unaligned_mut,
+                        padded,
+                        padded_mut,
+                        padding,
+                    }
+                },
+            )
+    }
+
     // TODO: Generate the building blocks to build a tuple of all supported data
     //       types with homogeneous length.
 
@@ -1122,12 +1196,12 @@ pub(crate) mod tests {
     }
 
     // 'static version of most types for empty slice testing
-    type AlignedStatic = AlignedData<'static, V>;
-    type AlignedStaticMut = AlignedDataMut<'static, V>;
-    type UnalignedStatic = UnalignedData<'static, V>;
-    type UnalignedStaticMut = UnalignedDataMut<'static, V>;
-    type PaddedStatic = PaddedData<'static, V>;
-    type PaddedStaticMut = PaddedDataMut<'static, V>;
+    type AlignedStatic = AlignedV<'static>;
+    type AlignedStaticMut = AlignedVMut<'static>;
+    type UnalignedStatic = UnalignedV<'static>;
+    type UnalignedStaticMut = UnalignedVMut<'static>;
+    type PaddedStatic = PaddedV<'static>;
+    type PaddedStaticMut = PaddedVMut<'static>;
 
     #[test]
     fn empty_aligned() {
@@ -1145,9 +1219,33 @@ pub(crate) mod tests {
 
     #[test]
     fn empty_padded() {
-        // Can't even test equality, will just check constructor doesn't crash
-        PaddedStatic::empty();
-        PaddedStaticMut::empty();
+        assert_eq!(PaddedStatic::empty().vectors, PaddedStatic::empty().vectors);
+        assert_eq!(
+            PaddedStatic::empty().vectors,
+            PaddedStaticMut::empty().inner.vectors
+        );
+        assert_eq!(
+            PaddedStaticMut::empty().inner.vectors,
+            PaddedStaticMut::empty().inner.vectors,
+        );
+        assert_eq!(
+            PaddedStaticMut::empty().num_last_elems,
+            PaddedStaticMut::empty().num_last_elems,
+        );
+    }
+
+    #[test]
+    fn empty_tuple() {
+        type ComparableTupleStatic = (AlignedStatic, UnalignedStatic);
+        type ComparableTupleStaticMut = (AlignedStaticMut, UnalignedStaticMut);
+        assert_eq!(
+            ComparableTupleStatic::empty(),
+            ComparableTupleStatic::empty()
+        );
+        assert_eq!(
+            ComparableTupleStaticMut::empty(),
+            ComparableTupleStaticMut::empty()
+        );
     }
 
     // Test properties of a freshly initialized data pointer
@@ -1196,22 +1294,35 @@ pub(crate) mod tests {
     fn extract_aligned(data: &mut [VScalar]) -> (NonNull<V>, &mut [VScalar]) {
         let (_, aligned, _) = unsafe { data.align_to_mut::<V>() };
         let base_ptr = NonNull::from(&aligned[..]).cast::<V>();
-        let aligned_scalars = unsafe { std::mem::transmute::<&mut [V], &mut [VScalar]>(aligned) };
+        let aligned_scalars = unsafe {
+            std::slice::from_raw_parts_mut(
+                aligned.as_mut_ptr().cast::<VScalar>(),
+                aligned.len() * V::LANES,
+            )
+        };
         (base_ptr, aligned_scalars)
     }
 
+    /// Extract the unaligned vectors subset of a scalar slice
+    fn extract_unaligned(data: &mut [VScalar]) -> (NonNull<VArray>, &mut [VScalar]) {
+        let len_vecs = (data.len() / V::LANES) * V::LANES;
+        let unaligned = &mut data[..len_vecs];
+        let base_ptr = NonNull::from(&unaligned[..]).cast::<VArray>();
+        (base_ptr, unaligned)
+    }
+
     proptest! {
-        // Test initializing AlignedVectors(Mut)?
+        // Test freshly initialized AlignedData(Mut)?
         #[test]
         fn init_aligned(mut data in aligned_init_input()) {
-            let slice_ptr = NonNull::from(&data[..]);
+            let slice_ptr = NonNull::from(data.as_slice());
             let aligned_raw = unsafe { AlignedData::from_data_ptr(slice_ptr) };
 
-            let mut aligned = AlignedData::from(&data[..]);
+            let mut aligned = AlignedData::from(data.as_slice());
             test_init(
                 slice_ptr,
-                aligned_raw,
                 aligned,
+                aligned_raw,
                 AlignedStatic::empty(),
                 AlignedStaticMut::empty(),
             );
@@ -1223,16 +1334,19 @@ pub(crate) mod tests {
 
             test_init(
                 slice_ptr,
+                AlignedDataMut::from(data.as_mut_slice()),
                 aligned_raw,
-                AlignedDataMut::from(&mut data[..]),
                 AlignedStatic::empty(),
                 AlignedStaticMut::empty(),
             );
-            let mut aligned_mut = AlignedDataMut::from(&mut data[..]);
+            let mut aligned_mut = AlignedDataMut::from(data.as_mut_slice());
             assert_eq!(aligned_mut.as_slice(), aligned_raw);
             unsafe {
                 assert_eq!(aligned_mut.as_aligned_unchecked(), aligned_raw);
-                assert_eq!(AlignedDataMut::from(&mut data[..]).as_unaligned_unchecked(), aligned_raw);
+                assert_eq!(
+                    AlignedDataMut::from(data.as_mut_slice()).as_unaligned_unchecked(),
+                    aligned_raw
+                );
             }
         }
 
@@ -1255,53 +1369,195 @@ pub(crate) mod tests {
             assert_eq!(slice(&mut unaligned), ptr);
         }
 
-        // Test initializing UnalignedVectors(Mut)?
+        // Test freshly initialized UnalignedData(Mut)?
         #[test]
         fn init_unaligned(mut data in unaligned_init_input()) {
-            let slice_ptr = NonNull::from(&data[..]);
-            let unaligned_raw = unsafe { UnalignedData::from_data_ptr(slice_ptr) };
-
+            let slice_ptr = NonNull::from(data.as_slice());
+            let unaligned_raw = unsafe { UnalignedV::from_data_ptr(slice_ptr) };
             let array_slice = unsafe { std::slice::from_raw_parts(
                 slice_ptr.cast::<VArray>().as_ptr(),
                 data.len() / V::LANES
             ) };
             let array_slice_ptr = NonNull::from(array_slice);
 
-            type Unaligned<'a> = UnalignedData<'a, V>;
-            let mut unaligned = Unaligned::from(&data[..]);
+            let mut unaligned = UnalignedV::from(data.as_slice());
             test_init(
                 array_slice_ptr,
-                unaligned_raw,
                 unaligned,
+                unaligned_raw,
                 UnalignedStatic::empty(),
                 UnalignedStaticMut::empty(),
             );
             assert_eq!(unaligned.as_slice(), unaligned_raw);
             unsafe {
                 assert_eq!(unaligned.as_unaligned_unchecked(), unaligned_raw);
-                let (aligned_base, aligned) = extract_aligned(&mut data[..]);
-                assert_eq!(Unaligned::from(&aligned[..]).as_aligned_unchecked(), aligned_base);
+                let (aligned_base, aligned) = extract_aligned(data.as_mut_slice());
+                assert_eq!(UnalignedV::from(&aligned[..]).as_aligned_unchecked(), aligned_base);
             }
 
-            type UnalignedMut<'a> = UnalignedDataMut<'a, V>;
-            let mut unaligned_mut = UnalignedMut::from(&mut data[..]);
+            let mut unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
             test_init(
                 array_slice_ptr,
-                unaligned_raw,
                 unaligned_mut,
+                unaligned_raw,
                 UnalignedStatic::empty(),
                 UnalignedStaticMut::empty(),
             );
-            unaligned_mut = UnalignedMut::from(&mut data[..]);
+            unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
             assert_eq!(unaligned_mut.as_slice(), unaligned_raw);
             unsafe {
-                assert_eq!(UnalignedMut::from(&mut data[..]).as_unaligned_unchecked(), unaligned_raw);
-                let (aligned_base, aligned) = extract_aligned(&mut data[..]);
-                assert_eq!(UnalignedDataMut::<V>::from(aligned).as_aligned_unchecked(), aligned_base);
+                assert_eq!(UnalignedVMut::from(data.as_mut_slice()).as_unaligned_unchecked(), unaligned_raw);
+                let (aligned_base, aligned) = extract_aligned(data.as_mut_slice());
+                assert_eq!(UnalignedVMut::from(aligned).as_aligned_unchecked(), aligned_base);
             }
         }
 
-        // TODO: Test PaddedData(Mut)?, test moar ops
+        // Test freshly initialized PaddedData(Mut)?
+        #[test]
+        fn init_padded((mut data, padding) in padded_init_input()) {
+            // Padding is required if data length is not divisible by V::LANES.
+            // In that case, constructor should error out if it's not present.
+            if (data.len() % V::LANES != 0) && (padding == None) {
+                assert!(matches!(PaddedV::new(data.as_slice(), padding),
+                                 Err(VectorizeError::NeedsPadding)));
+                assert!(matches!(PaddedVMut::new(data.as_mut_slice(), padding),
+                                 Err(VectorizeError::NeedsPadding)));
+                return Ok(());
+            }
+
+            // Common setup
+            let slice_ptr = NonNull::from(data.as_slice());
+            let unaligned_raw = unsafe { UnalignedV::from_data_ptr(slice_ptr) };
+            let array_slice = unsafe { std::slice::from_raw_parts(
+                slice_ptr.cast::<VArray>().as_ptr(),
+                data.len() / V::LANES
+            ) };
+            let array_slice_ptr = NonNull::from(array_slice);
+
+            // Check output of constructing PaddedData
+            let (mut padded, last_elems) = PaddedV::new(data.as_slice(), padding).unwrap();
+            test_init(
+                array_slice_ptr,
+                padded.vectors,
+                unaligned_raw,
+                PaddedStatic::empty(),
+                PaddedStaticMut::empty(),
+            );
+            let expected_last_elems = match data.len() {
+                0 => 0,
+                len if len % V::LANES == 0 => V::LANES,
+                other_len => other_len % V::LANES,
+            };
+            assert_eq!(last_elems, expected_last_elems);
+            let last_vector = (last_elems > 0).then(|| {
+                let last_vector = unsafe { padded.last_vector.assume_init() };
+                let offset = (array_slice.len() - (last_elems == V::LANES) as usize) * V::LANES;
+                let expected_last_vector = V::from_fn(|idx| if idx < last_elems {
+                    data[offset + idx]
+                } else {
+                    padding.unwrap()
+                });
+                assert_eq!(last_vector, expected_last_vector);
+                last_vector
+            });
+
+            // Check output of reinterpreting as a slice
+            {
+                let padded_slice = padded.as_slice();
+                assert_eq!(padded_slice.vectors, unaligned_raw);
+                if let Some(last_vector) = last_vector {
+                    let last_vector_slice = unsafe { padded_slice.last_vector.assume_init() };
+                    assert_eq!(last_vector, last_vector_slice);
+                }
+            }
+
+            // Check output of reinterpreting as unaligned data
+            {
+                let (unaligned_base, unaligned_data) = extract_unaligned(data.as_mut_slice());
+                let (padded, last_elems) = PaddedV::new(&unaligned_data[..], None).unwrap();
+                assert_eq!(unsafe { padded.as_unaligned_unchecked() }, unaligned_base);
+                assert_eq!(last_elems, V::LANES * (unaligned_data.len() > 0) as usize);
+            }
+
+            // Check output of reinterpreting as aligned data
+            {
+                let (aligned_base, aligned_data) = extract_aligned(data.as_mut_slice());
+                let (padded, last_elems) = PaddedV::new(&aligned_data[..], None).unwrap();
+                assert_eq!(unsafe { padded.as_aligned_unchecked() }, aligned_base);
+                assert_eq!(last_elems, V::LANES * (aligned_data.len() > 0) as usize);
+            }
+
+            // Check outcome of constructing PaddedDataMut
+            let mut padded_mut = PaddedVMut::new(data.as_mut_slice(), padding).unwrap();
+            if let Some(last_vector) = last_vector {
+                let last_vector_mut = unsafe { padded_mut.inner.last_vector.assume_init() };
+                assert_eq!(last_vector, last_vector_mut);
+            }
+            assert_eq!(padded_mut.num_last_elems, last_elems);
+            test_init(
+                array_slice_ptr,
+                padded_mut.inner.vectors,
+                unaligned_raw,
+                PaddedStatic::empty(),
+                PaddedStaticMut::empty(),
+            );
+
+            // Check outcome of reinterpreting as a slice
+            {
+                padded_mut = PaddedVMut::new(data.as_mut_slice(), padding).unwrap();
+                let padded_mut_slice = padded_mut.as_slice();
+                assert_eq!(padded_mut_slice.inner.vectors, unaligned_raw);
+                if let Some(last_vector) = last_vector {
+                    let last_vector_slice = unsafe { padded_mut_slice.inner.last_vector.assume_init() };
+                    assert_eq!(last_vector, last_vector_slice);
+                }
+                assert_eq!(padded_mut_slice.num_last_elems, last_elems);
+            }
+
+            // Check output of reinterpreting as unaligned data
+            {
+                let (unaligned_base, unaligned_data) = extract_unaligned(data.as_mut_slice());
+                padded_mut = PaddedVMut::new(unaligned_data, None).unwrap();
+                assert_eq!(unsafe { padded_mut.as_unaligned_unchecked() }, unaligned_base);
+            }
+
+            // Check output of reinterpreting as aligned data
+            {
+                let (aligned_base, aligned_data) = extract_aligned(data.as_mut_slice());
+                padded_mut = PaddedVMut::new(aligned_data, None).unwrap();
+                assert_eq!(unsafe { padded_mut.as_aligned_unchecked() }, aligned_base);
+            }
+        }
+
+        // Test freshly initialized TupleData
+        #[test]
+        fn init_tuple(mut init in tuple_init_input()) {
+            let aligned_base = NonNull::from(init.aligned.as_slice()).cast::<V>();
+            let aligned_mut_base = NonNull::from(init.aligned_mut.as_mut_slice()).cast::<V>();
+            let unaligned_base = NonNull::from(init.unaligned.as_slice()).cast::<VArray>();
+            let unaligned_mut_base = NonNull::from(init.unaligned_mut.as_mut_slice()).cast::<VArray>();
+            let padded_base = NonNull::from(init.padded.as_slice()).cast::<VArray>();
+            let padded_mut_base = NonNull::from(init.padded_mut.as_mut_slice()).cast::<VArray>();
+
+            let mut tuple: TupleData = (
+                AlignedV::from(init.aligned.as_slice()),
+                AlignedVMut::from(init.aligned_mut.as_mut_slice()),
+                UnalignedV::from(init.unaligned.as_slice()),
+                UnalignedVMut::from(init.unaligned_mut.as_mut_slice()),
+                PaddedV::new(init.padded.as_slice(), Some(init.padding)).unwrap().0,
+                PaddedVMut::new(init.padded_mut.as_mut_slice(), Some(init.padding)).unwrap(),
+            );
+
+            {
+                let slice = tuple.as_slice();
+                assert_eq!(slice.0, aligned_base);
+                assert_eq!(slice.1, aligned_mut_base);
+                assert_eq!(slice.2, unaligned_base);
+                assert_eq!(slice.3, unaligned_mut_base);
+                assert_eq!(slice.4.vectors, padded_base);
+                assert_eq!(slice.5.inner.vectors, padded_mut_base);
+            }
+        }
     }
 
     /* TODO: Ops that still need testing
