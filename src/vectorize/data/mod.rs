@@ -64,14 +64,14 @@ pub unsafe trait Vectorized<V: VectorInfo>: Sized {
     ///
     /// Will always be [`Self::Element`] with a reduced lifetime, but this
     /// constraint cannot be expressed in current Rust.
-    type ElementRef<'result>: Sized
+    type ElementMut<'result>: Sized
     where
         Self: 'result;
 
     /// Slice of this dataset
     ///
     /// Returned by methods that let you borrow a subset of `Vectors`.
-    type Slice<'result>: Vectorized<V, Element = Self::ElementRef<'result>> + VectorizedSliceImpl<V>
+    type Slice<'result>: Vectorized<V, Element = Self::ElementMut<'result>> + VectorizedSliceImpl<V>
     where
         Self: 'result;
 }
@@ -89,7 +89,7 @@ pub unsafe trait Vectorized<V: VectorInfo>: Sized {
 ///
 /// Instead, implementors of this type behave like the pointer that
 /// `[Vector]::as_ptr()` would return, and their main purpose is to
-/// implement the `[Vector]::get_unchecked(idx)` operation of the slice,
+/// implement the `[Vector]::get_unchecked(idx)` operations of the slice,
 /// like `*ptr.add(idx)` would in a real slice.
 ///
 /// # Safety
@@ -98,17 +98,17 @@ pub unsafe trait Vectorized<V: VectorInfo>: Sized {
 /// and the higher-level `Vectorized` trait as part of their safety proofs.
 ///
 /// The safety preconditions on `Vectorized` are that `Element` should
-/// not outlive `Self`, and that it should be safe to transmute `ElementRef`
+/// not outlive `Self`, and that it should be safe to transmute `ElementMut`
 /// to `Element` in scenarios where either `Element` is `Copy` or the
 /// transmute is abstracted in such a way that the user cannot abuse it to
 /// get two copies of the same element. In other words, `Element` should be
-/// the maximal-lifetime version of `ElementRef`.
+/// the maximal-lifetime version of `ElementMut`.
 ///
-/// Further, `Slice::ElementRef` should be pretty much the same GAT as
-/// `Self::ElementRef`, with just a different `Self` lifetime bound.
+/// Further, `Slice::ElementMut` should be pretty much the same GAT as
+/// `Self::ElementMut`, with just a different `Self` lifetime bound.
 ///
 /// Finally, a `Vectorized` impl is only allowed to implement `Copy` if
-/// the underlying element type is `Copy`.
+/// the source container type is `Copy` (i.e. not &mut container).
 #[doc(hidden)]
 pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
     /// Access the underlying slice at vector index `idx` without bounds
@@ -123,7 +123,7 @@ pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
     /// - Index `idx` must be in within the bounds of the underlying slice.
     /// - `is_last` must be true if and only if the last element of the
     ///   slice is being accessed.
-    unsafe fn get_unchecked(&mut self, idx: usize, is_last: bool) -> Self::ElementRef<'_>;
+    unsafe fn get_unchecked_mut(&mut self, idx: usize, is_last: bool) -> Self::ElementMut<'_>;
 
     /// Turn this data into the equivalent slice
     ///
@@ -267,13 +267,13 @@ impl<V: VectorInfo> Pointer for AlignedData<'_, V> {
 //
 unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedData<'target, V> {
     type Element = V;
-    type ElementRef<'result> = V where Self: 'result;
+    type ElementMut<'result> = V where Self: 'result;
     type Slice<'result> = AlignedData<'result, V> where Self: 'result;
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedData<'target, V> {
     #[inline(always)]
-    unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
+    unsafe fn get_unchecked_mut(&mut self, idx: usize, _is_last: bool) -> V {
         unsafe { *self.get_ptr(idx).as_ref() }
     }
 
@@ -312,13 +312,13 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for AlignedData<'targ
 // but otherwise behave like &[Vector]
 unsafe impl<V: VectorInfo, const SIZE: usize> Vectorized<V> for [V; SIZE] {
     type Element = V;
-    type ElementRef<'result> = V;
+    type ElementMut<'result> = V;
     type Slice<'result> = AlignedData<'result, V>;
 }
 //
 unsafe impl<V: VectorInfo, const SIZE: usize> VectorizedImpl<V> for [V; SIZE] {
     #[inline(always)]
-    unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
+    unsafe fn get_unchecked_mut(&mut self, idx: usize, _is_last: bool) -> V {
         unsafe { *<[V]>::get_unchecked(&self[..], idx) }
     }
 
@@ -405,13 +405,13 @@ impl<'target, V: VectorInfo> Pointer for AlignedDataMut<'target, V> {
 //
 unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedDataMut<'target, V> {
     type Element = &'target mut V;
-    type ElementRef<'result> = &'result mut V where Self: 'result;
+    type ElementMut<'result> = &'result mut V where Self: 'result;
     type Slice<'result> = AlignedDataMut<'result, V> where Self: 'result;
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedDataMut<'target, V> {
     #[inline(always)]
-    unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> &mut V {
+    unsafe fn get_unchecked_mut(&mut self, idx: usize, _is_last: bool) -> &mut V {
         unsafe { self.0.get_ptr(idx).as_mut() }
     }
 
@@ -532,13 +532,13 @@ impl<V: VectorInfo> Pointer for UnalignedData<'_, V> {
 //
 unsafe impl<'target, V: VectorInfo> Vectorized<V> for UnalignedData<'target, V> {
     type Element = V;
-    type ElementRef<'result> = V where Self: 'result;
+    type ElementMut<'result> = V where Self: 'result;
     type Slice<'result> = UnalignedData<'result, V> where Self: 'result;
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedData<'target, V> {
     #[inline(always)]
-    unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> V {
+    unsafe fn get_unchecked_mut(&mut self, idx: usize, _is_last: bool) -> V {
         unsafe { *self.get_ptr(idx).as_ref() }.into()
     }
 
@@ -647,14 +647,14 @@ impl<'target, V: VectorInfo> Pointer for UnalignedDataMut<'target, V> {
 }
 //
 unsafe impl<'target, V: VectorInfo> Vectorized<V> for UnalignedDataMut<'target, V> {
-    type Element = Self::ElementRef<'target>;
-    type ElementRef<'result> = UnalignedMut<'result, V> where Self: 'result;
+    type Element = Self::ElementMut<'target>;
+    type ElementMut<'result> = UnalignedMut<'result, V> where Self: 'result;
     type Slice<'result> = UnalignedDataMut<'result, V> where Self: 'result;
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedDataMut<'target, V> {
     #[inline(always)]
-    unsafe fn get_unchecked(&mut self, idx: usize, _is_last: bool) -> UnalignedMut<V> {
+    unsafe fn get_unchecked_mut(&mut self, idx: usize, _is_last: bool) -> UnalignedMut<V> {
         let target = self.0.get_ptr(idx).as_mut();
         let vector = V::from(*target);
         UnalignedMut::new(vector, target)
@@ -731,7 +731,7 @@ impl<'target, V: VectorInfo> PaddedData<'target, V> {
             } else {
                 (
                     MaybeUninit::new(unsafe {
-                        vectors.get_unchecked(data.len() / V::LANES - 1, true)
+                        vectors.get_unchecked_mut(data.len() / V::LANES - 1, true)
                     }),
                     V::LANES,
                 )
@@ -788,17 +788,17 @@ impl<'target, V: VectorInfo> Pointer for PaddedData<'target, V> {
 //
 unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedData<'target, V> {
     type Element = V;
-    type ElementRef<'result> = V where Self: 'result;
+    type ElementMut<'result> = V where Self: 'result;
     type Slice<'result> = PaddedData<'result, V> where Self: 'result;
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedData<'target, V> {
     #[inline(always)]
-    unsafe fn get_unchecked(&mut self, idx: usize, is_last: bool) -> V {
+    unsafe fn get_unchecked_mut(&mut self, idx: usize, is_last: bool) -> V {
         if is_last {
             unsafe { self.last_vector.assume_init() }
         } else {
-            unsafe { self.vectors.get_unchecked(idx, false) }
+            unsafe { self.vectors.get_unchecked_mut(idx, false) }
         }
     }
 
@@ -839,7 +839,7 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for PaddedData<'targe
         } else if mid == len {
             (self, Self::empty())
         } else {
-            let left_last_vector = self.vectors.get_unchecked(mid - 1, mid == len);
+            let left_last_vector = self.vectors.get_unchecked_mut(mid - 1, mid == len);
             let (left_vectors, right_vectors) = self.vectors.split_at_unchecked(mid, len);
             let wrap = |vectors, last_vector| Self {
                 vectors,
@@ -924,15 +924,15 @@ impl<'target, V: VectorInfo> Pointer for PaddedDataMut<'target, V> {
 //
 unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedDataMut<'target, V> {
     type Element = PaddedMut<'target, V>;
-    type ElementRef<'result> = PaddedMut<'result, V> where Self: 'result;
+    type ElementMut<'result> = PaddedMut<'result, V> where Self: 'result;
     type Slice<'result> = PaddedDataMut<'result, V> where Self: 'result;
 }
 //
 unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedDataMut<'target, V> {
     #[inline(always)]
-    unsafe fn get_unchecked(&mut self, idx: usize, is_last: bool) -> PaddedMut<V> {
+    unsafe fn get_unchecked_mut(&mut self, idx: usize, is_last: bool) -> PaddedMut<V> {
         PaddedMut::new(
-            self.inner.get_unchecked(idx, is_last),
+            self.inner.get_unchecked_mut(idx, is_last),
             core::slice::from_raw_parts_mut(
                 self.inner.get_ptr(idx).cast::<V::Scalar>().as_ptr(),
                 self.num_elems(is_last),
@@ -1005,7 +1005,7 @@ macro_rules! impl_vectorized_for_tuple {
             $(, $t: Vectorized<V> + 'target)*
         > Vectorized<V> for ($($t,)*) {
             type Element = ($($t::Element,)*);
-            type ElementRef<'result> = ($($t::ElementRef<'result>,)*) where Self: 'result;
+            type ElementMut<'result> = ($($t::ElementMut<'result>,)*) where Self: 'result;
             type Slice<'result> = ($($t::Slice<'result>,)*) where Self: 'result;
         }
 
@@ -1016,13 +1016,13 @@ macro_rules! impl_vectorized_for_tuple {
             $(, $t: VectorizedImpl<V> + 'target)*
         > VectorizedImpl<V> for ($($t,)*) {
             #[inline(always)]
-            unsafe fn get_unchecked(
+            unsafe fn get_unchecked_mut(
                 &mut self,
                 idx: usize,
                 is_last: bool
-            ) -> Self::ElementRef<'_> {
+            ) -> Self::ElementMut<'_> {
                 let ($($t,)*) = self;
-                unsafe { ($($t.get_unchecked(idx, is_last),)*) }
+                unsafe { ($($t.get_unchecked_mut(idx, is_last),)*) }
             }
 
             #[inline(always)]
@@ -1759,7 +1759,7 @@ pub(crate) mod tests {
                 let mut aligned = AlignedV::from(data.as_slice());
                 assert_eq!(unsafe { aligned.get_ptr(idx) }.as_ptr(),
                            base_ptr.as_ptr().wrapping_add(idx));
-                assert_eq!(unsafe { aligned.get_unchecked(idx, is_last) }, elem);
+                assert_eq!(unsafe { aligned.get_unchecked_mut(idx, is_last) }, elem);
             }
         }
 
@@ -1768,7 +1768,7 @@ pub(crate) mod tests {
         fn get_array((mut data, idx) in any_aligned_array().prop_flat_map(with_data_index)) {
             let elem = data.simd_element(idx);
             let is_last = data.is_last(idx);
-            assert_eq!(unsafe { VectorizedImpl::get_unchecked(&mut data, idx, is_last) },
+            assert_eq!(unsafe { VectorizedImpl::get_unchecked_mut(&mut data, idx, is_last) },
                        elem);
         }
 
@@ -1783,7 +1783,7 @@ pub(crate) mod tests {
             let is_last = data.is_last(idx);
             {
                 let mut aligned_mut = AlignedVMut::from(data.as_mut_slice());
-                let elem_ref = unsafe { aligned_mut.get_unchecked(idx, is_last) };
+                let elem_ref = unsafe { aligned_mut.get_unchecked_mut(idx, is_last) };
                 assert_eq!(*elem_ref, elem);
                 *elem_ref = new_elem;
             }
@@ -1800,7 +1800,7 @@ pub(crate) mod tests {
                 let mut unaligned = UnalignedV::from(data.as_slice());
                 assert_eq!(unsafe { unaligned.get_ptr(idx) }.as_ptr(),
                            base_ptr.as_ptr().wrapping_add(idx));
-                assert_eq!(unsafe { unaligned.get_unchecked(idx, is_last) }, elem);
+                assert_eq!(unsafe { unaligned.get_unchecked_mut(idx, is_last) }, elem);
             }
         }
 
@@ -1815,7 +1815,7 @@ pub(crate) mod tests {
             let is_last = data.is_last(idx);
             {
                 let mut unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
-                let mut elem_ref = unsafe { unaligned_mut.get_unchecked(idx, is_last) };
+                let mut elem_ref = unsafe { unaligned_mut.get_unchecked_mut(idx, is_last) };
                 assert_eq!(*elem_ref, elem);
                 *elem_ref = new_elem;
             }
@@ -1833,7 +1833,7 @@ pub(crate) mod tests {
                 let mut padded = PaddedV::new(data.as_slice(), padding).unwrap().0;
                 assert_eq!(unsafe { padded.get_ptr(idx) }.as_ptr(),
                            base_ptr.as_ptr().wrapping_add(idx));
-                assert_eq!(unsafe { padded.get_unchecked(idx, is_last) }, elem);
+                assert_eq!(unsafe { padded.get_unchecked_mut(idx, is_last) }, elem);
             }
         }
 
@@ -1855,7 +1855,7 @@ pub(crate) mod tests {
             {
                 let (data, padding) = &mut padded_data;
                 let mut padded_mut = PaddedVMut::new(data.as_mut_slice(), *padding).unwrap();
-                let mut elem_ref = unsafe { padded_mut.get_unchecked(idx, is_last) };
+                let mut elem_ref = unsafe { padded_mut.get_unchecked_mut(idx, is_last) };
                 assert_eq!(*elem_ref, elem);
                 *elem_ref = new_elem;
             }
@@ -1886,7 +1886,7 @@ pub(crate) mod tests {
                     mut unaligned_mut,
                     padded_val,
                     mut padded_mut
-                ) = unsafe { tuple.get_unchecked(idx, is_last) };
+                ) = unsafe { tuple.get_unchecked_mut(idx, is_last) };
                 let readout = (aligned_val, *aligned_mut, unaligned_val, *unaligned_mut, padded_val, *padded_mut);
                 assert_eq!(readout, elem);
                 *aligned_mut = !elem.1;

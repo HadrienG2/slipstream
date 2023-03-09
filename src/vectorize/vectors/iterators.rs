@@ -1,13 +1,13 @@
 //! Iteration over `Vectors`
 
-use crate::vectorize::{data::VectorizedImpl, Slice, VectorInfo, Vectors};
+use crate::vectorize::{data::VectorizedImpl, SliceMut, VectorInfo, Vectors};
 use core::{hint::unreachable_unchecked, iter::FusedIterator, num::NonZeroUsize};
 
-// IntoIterator impls for Vectors and &mut Vectors
+// IntoIterator impls for Vectors and references to it
 macro_rules! impl_iterator {
     (
         $(#[$attr:meta])*
-        ($name:ident, Data::$elem:ident$(<$lifetime:lifetime>)?)
+        ($name:ident, $get_unchecked:ident, $slice:ident, Data::$elem:ident$(<$lifetime:lifetime>)?)
     ) => {
         impl<$($lifetime,)? V: VectorInfo, Data: VectorizedImpl<V> $( + $lifetime)?> IntoIterator
             for $(&$lifetime mut)? Vectors<V, Data>
@@ -44,29 +44,8 @@ macro_rules! impl_iterator {
             #[inline(always)]
             unsafe fn get_elem<'iter>(&'iter mut self, idx: usize) -> Data::$elem$(<$lifetime>)? {
                 debug_assert!(idx < self.vectors.len());
-                let result = unsafe { self.vectors.get_unchecked(idx) };
-                unsafe { core::mem::transmute_copy::<Data::ElementRef<'iter>, Data::$elem$(<$lifetime>)?>(&result) }
-            }
-
-            $(
-                /// Views the underlying data as a subslice of the original
-                /// data.
-                ///
-                /// To avoid creating `&mut V` references that alias, this
-                /// is forced to consume the iterator
-                #[inline]
-                pub fn into_slice(self) -> Slice<$lifetime, V, Data> {
-                    unsafe { self.vectors.get_unchecked(self.start..self.end) }
-                }
-            )?
-
-            /// Views the underlying data as a subslice of the original data.
-            ///
-            /// To avoid creating `&mut V` references that alias, the
-            /// returned slice borrows its lifetime from the iterator.
-            #[inline]
-            pub fn as_slice(&mut self) -> Slice<V, Data> {
-                unsafe { self.vectors.get_unchecked(self.start..self.end) }
+                let result = unsafe { self.vectors.$get_unchecked(idx) };
+                unsafe { core::mem::transmute_copy::<Data::ElementMut<'iter>, Data::$elem$(<$lifetime>)?>(&result) }
             }
         }
         //
@@ -159,13 +138,46 @@ macro_rules! impl_iterator {
     }
 }
 impl_iterator!(
-    /// Borrowing iterator over [`Vectors`]' elements
-    (Iter, Data::ElementRef<'vectors>)
+    /// Mutable [`Vectors`] iterator
+    (IterMut, get_unchecked_mut, SliceMut, Data::ElementMut<'vectors>)
 );
 impl_iterator!(
-    /// Consuming iterator of [`Vectors`]' elements
-    (IntoIter, Data::Element)
+    /// Consuming [`Vectors`] iterator
+    (IntoIter, get_unchecked_mut, SliceMut, Data::Element)
 );
+
+// Conversion to slice is iterator type specific
+impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> IterMut<'vectors, V, Data> {
+    /// Views the underlying data as a subslice of the original
+    /// data.
+    ///
+    /// To avoid creating `&mut V` references that alias, this
+    /// is forced to consume the iterator
+    #[inline]
+    pub fn into_slice(self) -> SliceMut<'vectors, V, Data> {
+        unsafe { self.vectors.get_unchecked_mut(self.start..self.end) }
+    }
+
+    /// Views the underlying data as a subslice of the original data.
+    ///
+    /// To avoid creating `&mut V` references that alias, the
+    /// returned slice borrows its lifetime from the iterator.
+    #[inline]
+    pub fn as_mut_slice(&mut self) -> SliceMut<V, Data> {
+        unsafe { self.vectors.get_unchecked_mut(self.start..self.end) }
+    }
+}
+//
+impl<V: VectorInfo, Data: VectorizedImpl<V>> IntoIter<V, Data> {
+    /// Views the underlying data as a subslice of the original data.
+    ///
+    /// To avoid creating `&mut V` references that alias, the
+    /// returned slice borrows its lifetime from the iterator.
+    #[inline]
+    pub fn as_mut_slice(&mut self) -> SliceMut<V, Data> {
+        unsafe { self.vectors.get_unchecked_mut(self.start..self.end) }
+    }
+}
 
 /// An iterator over [`Vectors`] in (non-overlapping) chunks (`chunk_size`
 /// elements at a time), starting at the beginning of the dataset
@@ -173,16 +185,16 @@ impl_iterator!(
 /// When the dataset length is not evenly divided by the chunk size, the last
 /// slice of the iteration will be the remainder.
 ///
-/// This struct is created by [`Vectors::chunks()`].
-pub struct Chunks<'vectors, V: VectorInfo, Data: VectorizedImpl<V> + 'vectors> {
-    remainder: Option<Slice<'vectors, V, Data>>,
+/// This struct is created by [`Vectors::chunks_mut()`].
+pub struct ChunksMut<'vectors, V: VectorInfo, Data: VectorizedImpl<V> + 'vectors> {
+    remainder: Option<SliceMut<'vectors, V, Data>>,
     chunk_size: NonZeroUsize,
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Chunks<'vectors, V, Data> {
+impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ChunksMut<'vectors, V, Data> {
     /// Set up a chunks iterator
     #[inline]
-    pub(crate) fn new(vectors: Slice<'vectors, V, Data>, chunk_size: NonZeroUsize) -> Self {
+    pub(crate) fn new(vectors: SliceMut<'vectors, V, Data>, chunk_size: NonZeroUsize) -> Self {
         Self {
             remainder: Some(vectors),
             chunk_size,
@@ -196,8 +208,8 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Chunks<'vectors, V, Data>
     }
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Iterator for Chunks<'vectors, V, Data> {
-    type Item = Slice<'vectors, V, Data>;
+impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Iterator for ChunksMut<'vectors, V, Data> {
+    type Item = SliceMut<'vectors, V, Data>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -244,7 +256,7 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Iterator for Chunks<'vect
 }
 //
 impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> DoubleEndedIterator
-    for Chunks<'vectors, V, Data>
+    for ChunksMut<'vectors, V, Data>
 {
     #[inline(always)]
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -296,7 +308,7 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> DoubleEndedIterator
 }
 //
 impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ExactSizeIterator
-    for Chunks<'vectors, V, Data>
+    for ChunksMut<'vectors, V, Data>
 {
     #[inline]
     fn len(&self) -> usize {
@@ -308,11 +320,14 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ExactSizeIterator
     }
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> FusedIterator for Chunks<'vectors, V, Data> {}
+impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> FusedIterator
+    for ChunksMut<'vectors, V, Data>
+{
+}
 //
 #[cfg(feature = "iterator_ilp")]
 unsafe impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> iterator_ilp::TrustedLowerBound
-    for Chunks<'vectors, V, Data>
+    for ChunksMut<'vectors, V, Data>
 {
 }
 
@@ -323,25 +338,25 @@ unsafe impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> iterator_ilp::Trus
 /// up to `chunk_size-1` elements will be omitted but can be retrieved from the
 /// iterator using the `into_remainder()` function.
 ///
-/// This struct is created by [`Vectors::chunks_exact()`].
-pub struct ChunksExact<'vectors, V: VectorInfo, Data: VectorizedImpl<V> + 'vectors> {
-    regular: Chunks<'vectors, V, Data>,
-    remainder: Slice<'vectors, V, Data>,
+/// This struct is created by [`Vectors::chunks_exact_mut()`].
+pub struct ChunksExactMut<'vectors, V: VectorInfo, Data: VectorizedImpl<V> + 'vectors> {
+    regular: ChunksMut<'vectors, V, Data>,
+    remainder: SliceMut<'vectors, V, Data>,
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ChunksExact<'vectors, V, Data> {
+impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ChunksExactMut<'vectors, V, Data> {
     /// Set up an exact-size chunks iterator
     #[inline]
-    pub(crate) fn new(vectors: Slice<'vectors, V, Data>, chunk_size: NonZeroUsize) -> Self {
+    pub(crate) fn new(vectors: SliceMut<'vectors, V, Data>, chunk_size: NonZeroUsize) -> Self {
         let total_len = vectors.len();
         let remainder_len = total_len % chunk_size;
         let (regular_vectors, remainder) = if remainder_len > 0 {
             unsafe { vectors.split_at_unchecked(total_len - remainder_len) }
         } else {
-            (vectors, Slice::<'vectors, V, Data>::empty())
+            (vectors, SliceMut::<'vectors, V, Data>::empty())
         };
         Self {
-            regular: Chunks::new(regular_vectors, chunk_size),
+            regular: ChunksMut::new(regular_vectors, chunk_size),
             remainder,
         }
     }
@@ -350,7 +365,7 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ChunksExact<'vectors, V, 
     /// returned by the iterator. The returned slice has at most `chunk_size-1`
     /// elements.
     #[inline]
-    pub fn into_remainder(self) -> Slice<'vectors, V, Data> {
+    pub fn into_remainder(self) -> SliceMut<'vectors, V, Data> {
         self.remainder
     }
 
@@ -372,8 +387,10 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ChunksExact<'vectors, V, 
     }
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Iterator for ChunksExact<'vectors, V, Data> {
-    type Item = Slice<'vectors, V, Data>;
+impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Iterator
+    for ChunksExactMut<'vectors, V, Data>
+{
+    type Item = SliceMut<'vectors, V, Data>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -404,7 +421,7 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Iterator for ChunksExact<
 }
 //
 impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> DoubleEndedIterator
-    for ChunksExact<'vectors, V, Data>
+    for ChunksExactMut<'vectors, V, Data>
 {
     #[inline(always)]
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -420,7 +437,7 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> DoubleEndedIterator
 }
 //
 impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ExactSizeIterator
-    for ChunksExact<'vectors, V, Data>
+    for ChunksExactMut<'vectors, V, Data>
 {
     #[inline]
     fn len(&self) -> usize {
@@ -433,13 +450,13 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ExactSizeIterator
 }
 //
 impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> FusedIterator
-    for ChunksExact<'vectors, V, Data>
+    for ChunksExactMut<'vectors, V, Data>
 {
 }
 //
 #[cfg(feature = "iterator_ilp")]
 unsafe impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> iterator_ilp::TrustedLowerBound
-    for ChunksExact<'vectors, V, Data>
+    for ChunksExactMut<'vectors, V, Data>
 {
 }
 
