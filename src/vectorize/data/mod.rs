@@ -1109,6 +1109,9 @@ pub(crate) mod tests {
         (unaligned_init_input(), any::<Option<VScalar>>())
     }
 
+    // TODO: Generate the building blocks to build a tuple of all supported data
+    //       types with homogeneous length.
+
     // === TESTS FOR THIS MODULE ===
 
     // Hash a value
@@ -1189,6 +1192,14 @@ pub(crate) mod tests {
         assert_eq!(format!("{data:p}"), base_ptr_pointer);
     }
 
+    /// Extract the aligned subset of an unaligned scalar slice
+    fn extract_aligned(data: &mut [VScalar]) -> (NonNull<V>, &mut [VScalar]) {
+        let (_, aligned, _) = unsafe { data.align_to_mut::<V>() };
+        let base_ptr = NonNull::from(&aligned[..]).cast::<V>();
+        let aligned_scalars = unsafe { std::mem::transmute::<&mut [V], &mut [VScalar]>(aligned) };
+        (base_ptr, aligned_scalars)
+    }
+
     proptest! {
         // Test initializing AlignedVectors(Mut)?
         #[test]
@@ -1256,7 +1267,8 @@ pub(crate) mod tests {
             ) };
             let array_slice_ptr = NonNull::from(array_slice);
 
-            let mut unaligned = UnalignedData::<V>::from(&data[..]);
+            type Unaligned<'a> = UnalignedData<'a, V>;
+            let mut unaligned = Unaligned::from(&data[..]);
             test_init(
                 array_slice_ptr,
                 unaligned_raw,
@@ -1266,11 +1278,9 @@ pub(crate) mod tests {
             );
             assert_eq!(unaligned.as_slice(), unaligned_raw);
             unsafe {
-                // FIXME: Must meet preconditions first, do this via slice::align_mut
-                //        then extract main test logic in a function that takes
-                //        &mut [VScalar] and recurse to that.
-                // assert_eq!(unaligned.as_aligned_unchecked(), unaligned_raw);
                 assert_eq!(unaligned.as_unaligned_unchecked(), unaligned_raw);
+                let (aligned_base, aligned) = extract_aligned(&mut data[..]);
+                assert_eq!(Unaligned::from(&aligned[..]).as_aligned_unchecked(), aligned_base);
             }
 
             type UnalignedMut<'a> = UnalignedDataMut<'a, V>;
@@ -1285,9 +1295,9 @@ pub(crate) mod tests {
             unaligned_mut = UnalignedMut::from(&mut data[..]);
             assert_eq!(unaligned_mut.as_slice(), unaligned_raw);
             unsafe {
-                // FIXME: See above
-                // assert_eq!(aligned_mut.as_aligned_unchecked(), aligned_raw);
                 assert_eq!(UnalignedMut::from(&mut data[..]).as_unaligned_unchecked(), unaligned_raw);
+                let (aligned_base, aligned) = extract_aligned(&mut data[..]);
+                assert_eq!(UnalignedDataMut::<V>::from(aligned).as_aligned_unchecked(), aligned_base);
             }
         }
 
