@@ -1361,10 +1361,10 @@ pub(crate) mod tests {
     }
 
     /// Complement an existing SIMD dataset generation Strategy with an index
-    /// that's in range (use with prop_flat_map)
+    /// that's in range (use with prop_flat_map).
     ///
     /// Use with variants of the input generation strategies that _don't_ allow
-    /// empty datasets to be generated.
+    /// empty or invalid datasets to be generated.
     pub(crate) fn with_valid_index<Data: SimdData>(
         data: Data,
     ) -> impl Strategy<Value = (Data, usize)> {
@@ -1760,6 +1760,7 @@ pub(crate) mod tests {
         }
 
         /// Test the get_unchecked of AlignedDataMut
+        #[test]
         fn get_aligned_mut(
             ((mut data, idx), new_elem) in (aligned_init_input(false)
                                                 .prop_flat_map(with_valid_index),
@@ -1791,6 +1792,7 @@ pub(crate) mod tests {
         }
 
         /// Test the get_unchecked of UnalignedDataMut
+        #[test]
         fn get_unaligned_mut(
             ((mut data, idx), new_elem) in (unaligned_init_input(V::LANES)
                                                 .prop_flat_map(with_valid_index),
@@ -1823,6 +1825,7 @@ pub(crate) mod tests {
         }
 
         /// Test the get_unchecked of PaddedDataMut
+        #[test]
         fn get_padded_mut(
             ((mut padded_data, idx), new_elem) in (padded_init_input(false)
                                                         .prop_flat_map(with_valid_index),
@@ -1847,10 +1850,10 @@ pub(crate) mod tests {
             assert_eq!(
                 padded_data.simd_element(idx),
                 V::from_fn(|i| {
-                    if i < num_last_elems {
+                    if !is_last || i < num_last_elems {
                         new_elem[i]
                     } else {
-                        padded_data.1.unwrap()
+                        elem[i]
                     }
                 })
             );
