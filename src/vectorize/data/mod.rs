@@ -1083,7 +1083,7 @@ impl_vectorized_for_tuple!(A, B, C, D, E, F, G, H);
 pub(crate) mod tests {
     use super::*;
     use crate::vectorize::tests::{any_v, VArray, VScalar, V};
-    use proptest::prelude::*;
+    use proptest::{array::uniform2, prelude::*};
     use std::{collections::hash_map::DefaultHasher, hash::Hasher};
 
     // === COMMON TEST HARNESS ===
@@ -2049,23 +2049,50 @@ pub(crate) mod tests {
             }
         }
 
-        // TODO: PartialEq + PartialOrd: aligned, unaligned, padded, tuple
-    }
+        /// Test comparison of AlignedData(Mut)?
+        #[test]
+        fn cmp_aligned([mut data1, mut data2] in uniform2(aligned_init_input(true))) {
+            let base1 = data1.base_ptr();
+            let base2 = data2.base_ptr();
+            let eq = base1 == base2; // Should usually be false, we're testing true above
+            let cmp = base1.partial_cmp(&base2);
 
-    /* TODO: Ops that still need testing
+            {
+                let aligned1 = AlignedV::from(data1.as_slice());
+                let aligned2 = AlignedV::from(data2.as_slice());
+                assert_eq!(aligned1 == aligned2, eq);
+                assert_eq!(aligned1.partial_cmp(&aligned2), cmp);
+            }
 
-    // Not implemented for PaddedData(Mut)?, not manually implemented for AlignedArray
-    impl<V: VectorInfo> PartialEq for AlignedData<'_, V> {
-        fn eq(&self, other: &Self) -> bool {
-            self.0 == other.0
+            {
+                let aligned1_mut = AlignedVMut::from(data1.as_mut_slice());
+                let aligned2_mut = AlignedVMut::from(data2.as_mut_slice());
+                assert_eq!(aligned1_mut == aligned2_mut, eq);
+                assert_eq!(aligned1_mut.partial_cmp(&aligned2_mut), cmp);
+            }
+        }
+
+        /// Test comparison of UnalignedData(Mut)?
+        #[test]
+        fn cmp_unaligned([mut data1, mut data2] in uniform2(unaligned_init_input(0))) {
+            let base1 = data1.base_ptr();
+            let base2 = data2.base_ptr();
+            let eq = base1 == base2; // Should usually be false, we're testing true above
+            let cmp = base1.partial_cmp(&base2);
+
+            {
+                let unaligned1 = UnalignedV::from(data1.as_slice());
+                let unaligned2 = UnalignedV::from(data2.as_slice());
+                assert_eq!(unaligned1 == unaligned2, eq);
+                assert_eq!(unaligned1.partial_cmp(&unaligned2), cmp);
+            }
+
+            {
+                let unaligned1_mut = UnalignedVMut::from(data1.as_mut_slice());
+                let unaligned2_mut = UnalignedVMut::from(data2.as_mut_slice());
+                assert_eq!(unaligned1_mut == unaligned2_mut, eq);
+                assert_eq!(unaligned1_mut.partial_cmp(&unaligned2_mut), cmp);
+            }
         }
     }
-    //
-    impl<V: VectorInfo> PartialOrd for AlignedData<'_, V> {
-        fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-            self.0.partial_cmp(&other.0)
-        }
-    }
-
-    */
 }
