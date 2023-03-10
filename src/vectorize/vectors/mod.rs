@@ -217,7 +217,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     /// Equivalent to `self.index(..)`
     #[inline]
     pub fn as_mut_slice(&mut self) -> SliceMut<V, Data> {
-        unsafe { Vectors::from_raw_parts(self.data.as_slice(), self.len) }
+        unsafe { Vectors::from_raw_parts(self.data.as_ref_slice(), self.len) }
     }
 
     // TODO: Figure out inlining discipline for the following
@@ -285,7 +285,7 @@ impl<V: VectorInfo, Data: VectorizedSliceImpl<V>> Vectors<V, Data> {
 }
 
 /// Slice of [`Vectors`]
-pub type SliceMut<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::Slice<'a>>;
+pub type SliceMut<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::RefSlice<'a>>;
 
 /// Aligned SIMD data
 pub type AlignedVectors<V, Data> = Vectors<V, <Data as VectorizedImpl<V>>::Aligned>;

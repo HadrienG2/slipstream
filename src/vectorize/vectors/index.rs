@@ -42,7 +42,7 @@ unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for usi
         unsafe {
             vectors
                 .data
-                .get_unchecked_mut(self, self == vectors.last_idx())
+                .get_unchecked_ref(self, self == vectors.last_idx())
         }
     }
 }
