@@ -8,7 +8,7 @@
 //! reinterpretation. The high-level API that users invoke to manipulate the
 //! output slice is mostly defined in the `vectors` sibling module.
 
-mod proxies;
+mod mutation;
 
 use super::{VectorInfo, VectorizeError};
 #[cfg(doc)]
@@ -25,7 +25,7 @@ use core::{
     ptr::NonNull,
 };
 
-pub use proxies::{PaddedMut, UnalignedMut};
+pub use mutation::{PaddedMut, UnalignedMut};
 
 /// Outcome of reinterpreting [`Vectorizable`] data reinterpreted as [`Vectors`]
 ///
