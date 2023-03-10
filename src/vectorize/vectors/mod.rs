@@ -15,11 +15,19 @@ use super::{
 };
 #[cfg(doc)]
 use crate::{vectorize::Vectorizable, Vector};
-use core::{marker::PhantomData, num::NonZeroUsize};
+use core::{
+    borrow::Borrow,
+    fmt::{self, Debug},
+    marker::PhantomData,
+    num::NonZeroUsize,
+};
 
 // NOTE: Remember to re-export these in the parent vectorize module
 pub use index::VectorIndex;
-pub use iterators::{Chunks, ChunksExact, IntoIter, Iter, RefChunks, RefChunksExact, RefIter};
+pub use iterators::{
+    Chunks, ChunksExact, GenericChunks, GenericChunksExact, IntoIter, Iter, RefChunks,
+    RefChunksExact, RefIter,
+};
 
 /// SIMD data
 ///

@@ -1,5 +1,7 @@
 //! Indexing of `Vectors`
 
+#[cfg(doc)]
+use crate::vectorize::Vectorized;
 use crate::vectorize::{
     data::{VectorizedImpl, VectorizedSliceImpl},
     RefSlice, Slice, VectorInfo, Vectors,
@@ -23,7 +25,7 @@ pub unsafe trait VectorIndex<V: VectorInfo, Data: VectorizedImpl<V>> {
     /// [`Data::ElementCopy`] if this is a single index, [`Slice`] if this is a
     /// range of target indices.
     ///
-    /// [`Data::ElementCopy`]: Vectorize::ElementCopy
+    /// [`Data::ElementCopy`]: Vectorized::ElementCopy
     type Output<'out>
     where
         Self: 'out,
@@ -41,7 +43,7 @@ pub unsafe trait VectorIndex<V: VectorInfo, Data: VectorizedImpl<V>> {
     /// [`Data::ElementRef`] if this is a single index, [`RefSlice`] if this is
     /// a range of target indices.
     ///
-    /// [`Data::ElementRef`]: Vectorize::ElementRef
+    /// [`Data::ElementRef`]: Vectorized::ElementRef
     type RefOutput<'out>
     where
         Self: 'out,
