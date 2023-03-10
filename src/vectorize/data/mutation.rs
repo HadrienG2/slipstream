@@ -249,7 +249,7 @@ mod tests {
         // Test initializing a PaddedMut
         #[test]
         fn init_padded((init, mut target, target_len) in padded_init_input()) {
-            let old_target = target.clone();
+            let old_target = target;
             test_init(init, PaddedMut::new(init, &mut target[..target_len]));
             let init_arr = VArray::from(init);
             assert_eq!(&target[..target_len], &init_arr[..target_len]);
@@ -268,7 +268,7 @@ mod tests {
         // Test setting a PaddedMut to a new value
         #[test]
         fn set_padded(((init, mut target, target_len), new) in (padded_init_input(), any_v())) {
-            let old_target = target.clone();
+            let old_target = target;
             let mut proxy = PaddedMut::new(init, &mut target[..target_len]);
             *proxy = new;
             test_init(new, proxy);

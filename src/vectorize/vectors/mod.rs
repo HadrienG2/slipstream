@@ -480,8 +480,9 @@ where
         self.len() == other.len()
             && self
                 .iter()
+                .map(|a| *a.borrow())
                 .zip(other.iter().copied())
-                .all(|(a, b)| *a.borrow() == b)
+                .all(|(a, b)| a == b)
     }
 }
 

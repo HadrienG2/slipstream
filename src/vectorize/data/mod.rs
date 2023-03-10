@@ -180,7 +180,7 @@ pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
     ///
     /// The underlying scalar data must have a number of elements that is
     /// a multiple of `V::LANES`.
-    unsafe fn as_unaligned_unchecked(self) -> Self::Unaligned;
+    unsafe fn into_unaligned_unchecked(self) -> Self::Unaligned;
 
     /// Reinterpretation of this data as SIMD data with optimal layout
     type Aligned: Vectorized<V> + VectorizedImpl<V>;
@@ -191,7 +191,7 @@ pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
     ///
     /// The underlying scalar data must be aligned like V and have a number
     /// of elements that is a multiple of `V::LANES`.
-    unsafe fn as_aligned_unchecked(self) -> Self::Aligned;
+    unsafe fn into_aligned_unchecked(self) -> Self::Aligned;
 }
 
 /// `VectorizedImpl` that is a true slice, i.e. does not own its elements
@@ -292,7 +292,7 @@ impl<V: VectorInfo, Ptr: Borrow<NonNull<V>>> PartialEq<Ptr> for AlignedData<'_, 
     }
 }
 //
-impl<'other, V: VectorInfo, Ptr: Borrow<NonNull<V>>> PartialOrd<Ptr> for AlignedData<'_, V> {
+impl<V: VectorInfo, Ptr: Borrow<NonNull<V>>> PartialOrd<Ptr> for AlignedData<'_, V> {
     fn partial_cmp(&self, other: &Ptr) -> Option<core::cmp::Ordering> {
         self.0.partial_cmp(other.borrow())
     }
@@ -335,13 +335,13 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedData<'target, V
 
     type Unaligned = Self;
 
-    unsafe fn as_unaligned_unchecked(self) -> Self {
+    unsafe fn into_unaligned_unchecked(self) -> Self {
         self
     }
 
     type Aligned = Self;
 
-    unsafe fn as_aligned_unchecked(self) -> Self {
+    unsafe fn into_aligned_unchecked(self) -> Self {
         self
     }
 }
@@ -392,13 +392,13 @@ unsafe impl<V: VectorInfo, const SIZE: usize> VectorizedImpl<V> for [V; SIZE] {
 
     type Unaligned = Self;
 
-    unsafe fn as_unaligned_unchecked(self) -> Self {
+    unsafe fn into_unaligned_unchecked(self) -> Self {
         self
     }
 
     type Aligned = Self;
 
-    unsafe fn as_aligned_unchecked(self) -> Self {
+    unsafe fn into_aligned_unchecked(self) -> Self {
         self
     }
 }
@@ -454,7 +454,7 @@ impl<V: VectorInfo, Ptr: Borrow<NonNull<V>>> PartialEq<Ptr> for AlignedDataMut<'
     }
 }
 //
-impl<'other, V: VectorInfo, Ptr: Borrow<NonNull<V>>> PartialOrd<Ptr> for AlignedDataMut<'_, V> {
+impl<V: VectorInfo, Ptr: Borrow<NonNull<V>>> PartialOrd<Ptr> for AlignedDataMut<'_, V> {
     fn partial_cmp(&self, other: &Ptr) -> Option<core::cmp::Ordering> {
         self.0.partial_cmp(other.borrow())
     }
@@ -497,13 +497,13 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedDataMut<'target
 
     type Unaligned = Self;
 
-    unsafe fn as_unaligned_unchecked(self) -> Self {
+    unsafe fn into_unaligned_unchecked(self) -> Self {
         self
     }
 
     type Aligned = Self;
 
-    unsafe fn as_aligned_unchecked(self) -> Self {
+    unsafe fn into_aligned_unchecked(self) -> Self {
         self
     }
 }
@@ -591,9 +591,7 @@ impl<V: VectorInfo, Ptr: Borrow<NonNull<V::Array>>> PartialEq<Ptr> for Unaligned
     }
 }
 //
-impl<'other, V: VectorInfo, Ptr: Borrow<NonNull<V::Array>>> PartialOrd<Ptr>
-    for UnalignedData<'_, V>
-{
+impl<V: VectorInfo, Ptr: Borrow<NonNull<V::Array>>> PartialOrd<Ptr> for UnalignedData<'_, V> {
     fn partial_cmp(&self, other: &Ptr) -> Option<core::cmp::Ordering> {
         self.0.partial_cmp(other.borrow())
     }
@@ -636,13 +634,13 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedData<'target,
 
     type Unaligned = Self;
 
-    unsafe fn as_unaligned_unchecked(self) -> Self {
+    unsafe fn into_unaligned_unchecked(self) -> Self {
         self
     }
 
     type Aligned = AlignedData<'target, V>;
 
-    unsafe fn as_aligned_unchecked(self) -> AlignedData<'target, V> {
+    unsafe fn into_aligned_unchecked(self) -> AlignedData<'target, V> {
         V::assert_overaligned_array();
         debug_assert_eq!(
             self.0.as_ptr() as usize % core::mem::align_of::<V>(),
@@ -719,9 +717,7 @@ impl<V: VectorInfo, Ptr: Borrow<NonNull<V::Array>>> PartialEq<Ptr> for Unaligned
     }
 }
 //
-impl<'other, V: VectorInfo, Ptr: Borrow<NonNull<V::Array>>> PartialOrd<Ptr>
-    for UnalignedDataMut<'_, V>
-{
+impl<V: VectorInfo, Ptr: Borrow<NonNull<V::Array>>> PartialOrd<Ptr> for UnalignedDataMut<'_, V> {
     fn partial_cmp(&self, other: &Ptr) -> Option<core::cmp::Ordering> {
         self.0.partial_cmp(other.borrow())
     }
@@ -766,14 +762,14 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedDataMut<'targ
 
     type Unaligned = Self;
 
-    unsafe fn as_unaligned_unchecked(self) -> Self {
+    unsafe fn into_unaligned_unchecked(self) -> Self {
         self
     }
 
     type Aligned = AlignedDataMut<'target, V>;
 
-    unsafe fn as_aligned_unchecked(self) -> AlignedDataMut<'target, V> {
-        AlignedDataMut(self.0.as_aligned_unchecked(), PhantomData)
+    unsafe fn into_aligned_unchecked(self) -> AlignedDataMut<'target, V> {
+        AlignedDataMut(self.0.into_aligned_unchecked(), PhantomData)
     }
 }
 //
@@ -923,14 +919,14 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedData<'target, V>
 
     type Unaligned = UnalignedData<'target, V>;
 
-    unsafe fn as_unaligned_unchecked(self) -> UnalignedData<'target, V> {
+    unsafe fn into_unaligned_unchecked(self) -> UnalignedData<'target, V> {
         self.vectors
     }
 
     type Aligned = AlignedData<'target, V>;
 
-    unsafe fn as_aligned_unchecked(self) -> AlignedData<'target, V> {
-        unsafe { self.vectors.as_aligned_unchecked() }
+    unsafe fn into_aligned_unchecked(self) -> AlignedData<'target, V> {
+        unsafe { self.vectors.into_aligned_unchecked() }
     }
 }
 //
@@ -1074,14 +1070,14 @@ unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedDataMut<'target,
 
     type Unaligned = UnalignedDataMut<'target, V>;
 
-    unsafe fn as_unaligned_unchecked(self) -> UnalignedDataMut<'target, V> {
-        unsafe { UnalignedDataMut(self.inner.as_unaligned_unchecked(), PhantomData) }
+    unsafe fn into_unaligned_unchecked(self) -> UnalignedDataMut<'target, V> {
+        unsafe { UnalignedDataMut(self.inner.into_unaligned_unchecked(), PhantomData) }
     }
 
     type Aligned = AlignedDataMut<'target, V>;
 
-    unsafe fn as_aligned_unchecked(self) -> AlignedDataMut<'target, V> {
-        unsafe { AlignedDataMut(self.inner.as_aligned_unchecked(), PhantomData) }
+    unsafe fn into_aligned_unchecked(self) -> AlignedDataMut<'target, V> {
+        unsafe { AlignedDataMut(self.inner.into_aligned_unchecked(), PhantomData) }
     }
 }
 //
@@ -1174,16 +1170,16 @@ macro_rules! impl_vectorized_for_tuple {
 
             type Unaligned = ($($t::Unaligned,)*);
 
-            unsafe fn as_unaligned_unchecked(self) -> Self::Unaligned {
+            unsafe fn into_unaligned_unchecked(self) -> Self::Unaligned {
                 let ($($t,)*) = self;
-                unsafe { ($($t.as_unaligned_unchecked(),)*) }
+                unsafe { ($($t.into_unaligned_unchecked(),)*) }
             }
 
             type Aligned = ($($t::Aligned,)*);
 
-            unsafe fn as_aligned_unchecked(self) -> Self::Aligned {
+            unsafe fn into_aligned_unchecked(self) -> Self::Aligned {
                 let ($($t,)*) = self;
-                unsafe { ($($t.as_aligned_unchecked(),)*) }
+                unsafe { ($($t.into_aligned_unchecked(),)*) }
             }
         }
 
@@ -1620,7 +1616,7 @@ pub(crate) mod tests {
         let base_ptr_hash = hash(&base_ptr);
         let base_ptr_pointer = format!("{base_ptr:p}");
 
-        assert_eq!(data, data);
+        assert!(data.eq(&data));
         assert_eq!(data, base_ptr);
         assert_eq!(data, data_from_raw);
 
@@ -1635,6 +1631,7 @@ pub(crate) mod tests {
     }
 
     /// Extract the aligned subset of an unaligned scalar slice
+    #[allow(clippy::redundant_slicing)]
     fn extract_aligned(data: &mut [VScalar]) -> (NonNull<V>, &mut [VScalar]) {
         let (_, aligned, _) = unsafe { data.align_to_mut::<V>() };
         let base_ptr = NonNull::from(&aligned[..]).cast::<V>();
@@ -1648,6 +1645,7 @@ pub(crate) mod tests {
     }
 
     /// Extract the unaligned vectors subset of a scalar slice
+    #[allow(clippy::redundant_slicing)]
     fn extract_unaligned(data: &mut [VScalar]) -> (NonNull<VArray>, &mut [VScalar]) {
         let len_vecs = (data.len() / V::LANES) * V::LANES;
         let unaligned = &mut data[..len_vecs];
@@ -1673,8 +1671,8 @@ pub(crate) mod tests {
             assert_eq!(aligned.as_slice(), aligned_raw);
             assert_eq!(aligned.as_ref_slice(), aligned_raw);
             unsafe {
-                assert_eq!(aligned.as_aligned_unchecked(), aligned_raw);
-                assert_eq!(aligned.as_unaligned_unchecked(), aligned_raw);
+                assert_eq!(aligned.into_aligned_unchecked(), aligned_raw);
+                assert_eq!(aligned.into_unaligned_unchecked(), aligned_raw);
             }
 
             test_init(
@@ -1688,9 +1686,9 @@ pub(crate) mod tests {
             assert_eq!(aligned_mut.as_slice(), aligned_raw);
             assert_eq!(aligned_mut.as_ref_slice(), aligned_raw);
             unsafe {
-                assert_eq!(aligned_mut.as_aligned_unchecked(), aligned_raw);
+                assert_eq!(aligned_mut.into_aligned_unchecked(), aligned_raw);
                 assert_eq!(
-                    AlignedDataMut::from(data.as_mut_slice()).as_unaligned_unchecked(),
+                    AlignedDataMut::from(data.as_mut_slice()).into_unaligned_unchecked(),
                     aligned_raw
                 );
             }
@@ -1700,10 +1698,10 @@ pub(crate) mod tests {
         #[test]
         fn init_array(mut data in any_aligned_array()) {
             let data_ptr = |data: &AlignedArray| NonNull::from(data).cast::<V>();
-            let slice = |data| <AlignedArray as VectorizedImpl<V>>::as_ref_slice(data);
+            let slice = <AlignedArray as VectorizedImpl<V>>::as_ref_slice;
 
-            let mut aligned = unsafe { data.as_aligned_unchecked() };
-            let mut unaligned = unsafe { data.as_unaligned_unchecked() };
+            let mut aligned = unsafe { data.into_aligned_unchecked() };
+            let mut unaligned = unsafe { data.into_unaligned_unchecked() };
 
             let mut ptr = data_ptr(&data);
             assert_eq!(slice(&mut data), ptr);
@@ -1736,10 +1734,11 @@ pub(crate) mod tests {
             );
             assert_eq!(unaligned.as_slice(), unaligned_raw);
             assert_eq!(unaligned.as_ref_slice(), unaligned_raw);
+            #[allow(clippy::redundant_slicing)]
             unsafe {
-                assert_eq!(unaligned.as_unaligned_unchecked(), unaligned_raw);
+                assert_eq!(unaligned.into_unaligned_unchecked(), unaligned_raw);
                 let (aligned_base, aligned) = extract_aligned(data.as_mut_slice());
-                assert_eq!(UnalignedV::from(&aligned[..]).as_aligned_unchecked(), aligned_base);
+                assert_eq!(UnalignedV::from(&aligned[..]).into_aligned_unchecked(), aligned_base);
             }
 
             let mut unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
@@ -1754,18 +1753,19 @@ pub(crate) mod tests {
             assert_eq!(unaligned_mut.as_slice(), unaligned_raw);
             assert_eq!(unaligned_mut.as_ref_slice(), unaligned_raw);
             unsafe {
-                assert_eq!(UnalignedVMut::from(data.as_mut_slice()).as_unaligned_unchecked(), unaligned_raw);
+                assert_eq!(UnalignedVMut::from(data.as_mut_slice()).into_unaligned_unchecked(), unaligned_raw);
                 let (aligned_base, aligned) = extract_aligned(data.as_mut_slice());
-                assert_eq!(UnalignedVMut::from(aligned).as_aligned_unchecked(), aligned_base);
+                assert_eq!(UnalignedVMut::from(aligned).into_aligned_unchecked(), aligned_base);
             }
         }
 
         /// Test freshly initialized PaddedData(Mut)?
         #[test]
+        #[allow(clippy::redundant_slicing)]
         fn init_padded((mut data, padding) in padded_init_input(true)) {
             // Padding is required if data length is not divisible by V::LANES.
             // In that case, constructor should error out if it's not present.
-            if (data.len() % V::LANES != 0) && (padding == None) {
+            if (data.len() % V::LANES != 0) && padding.is_none() {
                 assert!(matches!(PaddedV::new(data.as_slice(), padding),
                                  Err(VectorizeError::NeedsPadding)));
                 assert!(matches!(PaddedVMut::new(data.as_mut_slice(), padding),
@@ -1831,16 +1831,16 @@ pub(crate) mod tests {
             {
                 let (unaligned_base, unaligned_data) = extract_unaligned(data.as_mut_slice());
                 let (padded, last_elems) = PaddedV::new(&unaligned_data[..], None).unwrap();
-                assert_eq!(unsafe { padded.as_unaligned_unchecked() }, unaligned_base);
-                assert_eq!(last_elems, V::LANES * (unaligned_data.len() > 0) as usize);
+                assert_eq!(unsafe { padded.into_unaligned_unchecked() }, unaligned_base);
+                assert_eq!(last_elems, V::LANES * (!unaligned_data.is_empty()) as usize);
             }
 
             // Check output of reinterpreting as aligned data
             {
                 let (aligned_base, aligned_data) = extract_aligned(data.as_mut_slice());
                 let (padded, last_elems) = PaddedV::new(&aligned_data[..], None).unwrap();
-                assert_eq!(unsafe { padded.as_aligned_unchecked() }, aligned_base);
-                assert_eq!(last_elems, V::LANES * (aligned_data.len() > 0) as usize);
+                assert_eq!(unsafe { padded.into_aligned_unchecked() }, aligned_base);
+                assert_eq!(last_elems, V::LANES * (!aligned_data.is_empty()) as usize);
             }
 
             // Check outcome of constructing PaddedDataMut
@@ -1883,14 +1883,14 @@ pub(crate) mod tests {
             {
                 let (unaligned_base, unaligned_data) = extract_unaligned(data.as_mut_slice());
                 padded_mut = PaddedVMut::new(unaligned_data, None).unwrap();
-                assert_eq!(unsafe { padded_mut.as_unaligned_unchecked() }, unaligned_base);
+                assert_eq!(unsafe { padded_mut.into_unaligned_unchecked() }, unaligned_base);
             }
 
             // Check output of reinterpreting as aligned data
             {
                 let (aligned_base, aligned_data) = extract_aligned(data.as_mut_slice());
                 padded_mut = PaddedVMut::new(aligned_data, None).unwrap();
-                assert_eq!(unsafe { padded_mut.as_aligned_unchecked() }, aligned_base);
+                assert_eq!(unsafe { padded_mut.into_aligned_unchecked() }, aligned_base);
             }
         }
 
@@ -1948,7 +1948,7 @@ pub(crate) mod tests {
         fn get_array((mut data, idx) in any_aligned_array().prop_flat_map(with_data_index)) {
             let elem = data.simd_element(idx);
             let is_last = data.is_last(idx);
-            assert_eq!(unsafe { VectorizedImpl::get_unchecked(&mut data, idx, is_last) }, elem);
+            assert_eq!(unsafe { VectorizedImpl::get_unchecked(&data, idx, is_last) }, elem);
             assert_eq!(unsafe { VectorizedImpl::get_unchecked_ref(&mut data, idx, is_last) }, elem);
         }
 

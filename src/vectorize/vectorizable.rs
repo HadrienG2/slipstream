@@ -110,7 +110,7 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     /// [`vectorize_pad()`]: Vectorizable::vectorize_pad()
     fn vectorize(self) -> UnalignedVectors<V, Self::Vectorized> {
         let (base, len) = self.into_vectorized_parts(None).unwrap();
-        unsafe { Vectors::from_raw_parts(base.as_unaligned_unchecked(), len) }
+        unsafe { Vectors::from_raw_parts(base.into_unaligned_unchecked(), len) }
     }
 
     /// Create a SIMD view of this data, providing some padding
@@ -165,7 +165,7 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     ///   amount of SIMD elements.
     fn vectorize_aligned(self) -> AlignedVectors<V, Self::Vectorized> {
         let (base, len) = self.into_vectorized_parts(None).unwrap();
-        unsafe { Vectors::from_raw_parts(base.as_aligned_unchecked(), len) }
+        unsafe { Vectors::from_raw_parts(base.into_aligned_unchecked(), len) }
     }
 }
 
