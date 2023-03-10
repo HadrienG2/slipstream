@@ -125,7 +125,7 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     ///
     /// The use of padding makes it harder for the compiler to optimize the
     /// code even if the padding ends up not being used, so using this
-    /// option will generally result in lower runtime performance.
+    /// option will generally result in lower runtime performance on scalar data.
     ///
     /// # Panics
     ///
@@ -139,8 +139,11 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     /// Create a SIMD view of this data, assert it is (or can be moved to) a
     /// layout optimized for SIMD processing
     ///
-    /// Vector data always passes this check, but scalar data only passes it
-    /// if it meets two conditions:
+    /// Vector data always meets this requirement, and indeed, you do not need
+    /// to call `vectorize_aligned()` to get the associated performance boost, it
+    /// will be present even if you only call `vectorize()` or `vectorize_pad()`.
+    ///
+    /// But scalar data only passes this check if it meets two conditions:
     ///
     /// - The start of the data is aligned as
     ///   [`core::mem::align_of::<V>()`](core::mem::align_of),
@@ -148,7 +151,7 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     /// - The number of inner scalar elements is a multiple of the number
     ///   of SIMD vector lanes of V.
     ///
-    /// If this is true, the data is reinterpreted in a manner that will
+    /// If this is true, that data is reinterpreted in a manner that will
     /// simplify the implementation, which should result in less edge cases
     /// where the compiler does not generate good code.
     ///
@@ -157,6 +160,15 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     /// generate good code, the resulting binary will perform less well if
     /// the data does not have the above properties. So you should enforce
     /// them whenever possible!
+    ///
+    /// If you need to process a single slice of scalar data that does not meet
+    /// these requirements, note that you can extract an aligned subset that
+    /// meets them using [`[Scalar]::align_to::<V>()`](slice::align_to()) or
+    /// [`[Scalar]::align_to_mut::<V>()`](slice::align_to_mut), as an
+    /// alternative to using `Vectorizable::vectorize()`. Beware that this
+    /// will not help if you need to jointly process multiple slices of scalar
+    /// data, which might be differently misaligned (and thus the output aligned
+    /// slices of V may not line up).
     ///
     /// # Panics
     ///

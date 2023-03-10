@@ -397,7 +397,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
 ///
 /// These operations are currently only available on slices of [`Vectors`]. You
 /// can extract a slice covering all data within a [`Vectors`] container using
-/// [`Vectors::as_slice()`].
+/// [`Vectors::as_slice()`] or [`Vectors::as_ref_slice()`].
 //
 // --- Internal docs start here ---
 //
