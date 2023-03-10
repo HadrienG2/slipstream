@@ -449,6 +449,41 @@ impl<V: VectorInfo, Data: VectorizedSliceImpl<V>> Vectors<V, Data> {
         (wrap(left_data, mid), wrap(right_data, total_len - mid))
     }
 }
+//
+/// V: Debug implies Data::ElementCopy: Debug, but we can't prove it to rustc yet
+impl<V: VectorInfo + Debug, Data: VectorizedImpl<V>> Debug for Vectors<V, Data>
+where
+    Data::ElementCopy: Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+//
+/// Applies if the two vectors emit elements of type V or tuples of the same arity
+impl<V: VectorInfo + PartialEq, Data1: VectorizedImpl<V>, Data2: VectorizedImpl<V>>
+    PartialEq<Vectors<V, Data2>> for Vectors<V, Data1>
+where
+    Data1::ElementCopy: PartialEq<Data2::ElementCopy>,
+{
+    fn eq(&self, other: &Vectors<V, Data2>) -> bool {
+        self.len() == other.len() && self.iter().zip(other.iter()).all(|(a, b)| a == b)
+    }
+}
+//
+/// Applies if this was built from a single slice/container, not a tuple of data
+impl<V: VectorInfo + PartialEq, Data: VectorizedImpl<V>> PartialEq<[V]> for Vectors<V, Data>
+where
+    Data::ElementCopy: Borrow<V>,
+{
+    fn eq(&self, other: &[V]) -> bool {
+        self.len() == other.len()
+            && self
+                .iter()
+                .zip(other.iter().copied())
+                .all(|(a, b)| *a.borrow() == b)
+    }
+}
 
 /// Read-only slice of [`Vectors`]
 pub type Slice<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::CopySlice<'a>>;
