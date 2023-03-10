@@ -45,7 +45,7 @@ macro_rules! impl_iterator {
             unsafe fn get_elem<'iter>(&'iter mut self, idx: usize) -> Data::$elem$(<$lifetime>)? {
                 debug_assert!(idx < self.vectors.len());
                 let result = unsafe { self.vectors.$get_unchecked(idx) };
-                unsafe { core::mem::transmute_copy::<Data::ElementMut<'iter>, Data::$elem$(<$lifetime>)?>(&result) }
+                unsafe { core::mem::transmute_copy::<Data::ElementRef<'iter>, Data::$elem$(<$lifetime>)?>(&result) }
             }
         }
         //
@@ -139,7 +139,7 @@ macro_rules! impl_iterator {
 }
 impl_iterator!(
     /// Mutable [`Vectors`] iterator
-    (IterMut, get_unchecked_mut, SliceMut, Data::ElementMut<'vectors>)
+    (IterMut, get_unchecked_mut, SliceMut, Data::ElementRef<'vectors>)
 );
 impl_iterator!(
     /// Consuming [`Vectors`] iterator

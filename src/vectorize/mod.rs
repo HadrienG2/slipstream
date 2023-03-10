@@ -146,7 +146,7 @@ pub unsafe trait VectorInfo:
     AsRef<[Self::Scalar]> + Copy + From<Self::Array> + Into<Self::Array> + Sized + 'static
 {
     /// Inner scalar type (commonly called B in generics)
-    type Scalar: Copy + Sized + 'static;
+    type Scalar: Copy + Repr + Sized + 'static;
 
     /// Number of vector lanes (commonly called S in generics)
     const LANES: usize;

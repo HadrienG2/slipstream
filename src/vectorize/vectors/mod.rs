@@ -64,14 +64,14 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
 
     /// Returns the first element, or None if the container is empty
     #[inline]
-    pub fn first_mut(&mut self) -> Option<Data::ElementMut<'_>> {
+    pub fn first_mut(&mut self) -> Option<Data::ElementRef<'_>> {
         self.get_mut(0)
     }
 
     /// Returns the first and all the rest of the elements of the container,
     /// or None if it is empty.
     #[inline(always)]
-    pub fn split_first_mut(&mut self) -> Option<(Data::ElementMut<'_>, SliceMut<V, Data>)> {
+    pub fn split_first_mut(&mut self) -> Option<(Data::ElementRef<'_>, SliceMut<V, Data>)> {
         (!self.is_empty()).then(move || {
             let (head, tail) = unsafe { self.as_mut_slice().split_at_unchecked(1) };
             (head.into_iter().next().unwrap(), tail)
@@ -81,7 +81,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     /// Returns the last and all the rest of the elements of the container,
     /// or None if it is empty.
     #[inline(always)]
-    pub fn split_last_mut(&mut self) -> Option<(Data::ElementMut<'_>, SliceMut<V, Data>)> {
+    pub fn split_last_mut(&mut self) -> Option<(Data::ElementRef<'_>, SliceMut<V, Data>)> {
         (!self.is_empty()).then(move || {
             let last = self.last_idx();
             let (head, tail) = unsafe { self.as_mut_slice().split_at_unchecked(last) };
@@ -91,7 +91,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
 
     /// Returns the last element, or None if the container is empty
     #[inline]
-    pub fn last_mut(&mut self) -> Option<Data::ElementMut<'_>> {
+    pub fn last_mut(&mut self) -> Option<Data::ElementRef<'_>> {
         self.get_mut(self.last_idx())
     }
 

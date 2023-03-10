@@ -30,7 +30,7 @@ pub unsafe trait VectorIndex<V: VectorInfo, Data: VectorizedImpl<V>> {
 }
 
 unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for usize {
-    type OutputMut<'out> = Data::ElementMut<'out> where Self: 'out, Data: 'out;
+    type OutputMut<'out> = Data::ElementRef<'out> where Self: 'out, Data: 'out;
 
     #[inline(always)]
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
