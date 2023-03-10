@@ -4,7 +4,8 @@ use crate::vectorize::{data::VectorizedImpl, RefSlice, Slice, VectorInfo, Vector
 use core::iter::FusedIterator;
 
 /// Genericity over Vectors, &Vectors and &mut Vectors
-trait VectorsLike {
+#[doc(hidden)]
+pub trait VectorsLike {
     fn len(&self) -> usize;
 
     type Item;
@@ -165,14 +166,7 @@ unsafe impl<Vecs: VectorsLike> iterator_ilp::TrustedLowerBound for GenericIter<V
 
 /// Read-only [`Vectors`] iterator
 pub type Iter<'vectors, V, Data> = GenericIter<&'vectors Vectors<V, Data>>;
-
-/// In-place [`Vectors`] iterator
-pub type RefIter<'vectors, V, Data> = GenericIter<&'vectors mut Vectors<V, Data>>;
-
-/// Consuming [`Vectors`] iterator
-pub type IntoIter<V, Data> = GenericIter<Vectors<V, Data>>;
-
-// Conversion to slice is iterator type specific
+//
 impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Iter<'vectors, V, Data> {
     /// Views the underlying data as a subslice of the original data.
     ///
@@ -183,6 +177,19 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Iter<'vectors, V, Data> {
         unsafe { self.vectors.get_unchecked(self.start..self.end) }
     }
 }
+//
+impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> IntoIterator for &'vectors Vectors<V, Data> {
+    type Item = Data::ElementCopy;
+    type IntoIter = Iter<'vectors, V, Data>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        Self::IntoIter::new(self)
+    }
+}
+
+/// In-place [`Vectors`] iterator
+pub type RefIter<'vectors, V, Data> = GenericIter<&'vectors mut Vectors<V, Data>>;
 //
 impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> RefIter<'vectors, V, Data> {
     /// Views the underlying data as a subslice of the original
@@ -205,6 +212,21 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> RefIter<'vectors, V, Data
     }
 }
 //
+impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> IntoIterator
+    for &'vectors mut Vectors<V, Data>
+{
+    type Item = Data::ElementRef<'vectors>;
+    type IntoIter = RefIter<'vectors, V, Data>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        Self::IntoIter::new(self)
+    }
+}
+
+/// Consuming [`Vectors`] iterator
+pub type IntoIter<V, Data> = GenericIter<Vectors<V, Data>>;
+//
 impl<V: VectorInfo, Data: VectorizedImpl<V>> IntoIter<V, Data> {
     /// Remaining items of this iterator, as a read-only slice
     #[inline]
@@ -218,33 +240,10 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> IntoIter<V, Data> {
         unsafe { self.vectors.get_unchecked_ref(self.start..self.end) }
     }
 }
-
-/// IntoIterator implementation can't be generic over Vecs because orphan rules don't allow it
+//
 impl<V: VectorInfo, Data: VectorizedImpl<V>> IntoIterator for Vectors<V, Data> {
     type Item = Data::Element;
     type IntoIter = IntoIter<V, Data>;
-
-    #[inline]
-    fn into_iter(self) -> Self::IntoIter {
-        Self::IntoIter::new(self)
-    }
-}
-//
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> IntoIterator for &'vectors Vectors<V, Data> {
-    type Item = Data::ElementCopy;
-    type IntoIter = Iter<'vectors, V, Data>;
-
-    #[inline]
-    fn into_iter(self) -> Self::IntoIter {
-        Self::IntoIter::new(self)
-    }
-}
-//
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> IntoIterator
-    for &'vectors mut Vectors<V, Data>
-{
-    type Item = Data::ElementRef<'vectors>;
-    type IntoIter = RefIter<'vectors, V, Data>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {

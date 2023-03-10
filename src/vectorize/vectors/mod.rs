@@ -270,7 +270,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     #[inline]
     pub fn chunks(&self, chunk_size: usize) -> Chunks<V, Data> {
         let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
-        Chunks::new(self.as_slice(), chunk_size)
+        Chunks::<V, Data>::new(self.as_slice(), chunk_size)
     }
 
     /// Returns an iterator over `chunk_size` elements of the dataset at a time,
@@ -293,7 +293,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     #[inline]
     pub fn chunks_ref(&mut self, chunk_size: usize) -> RefChunks<V, Data> {
         let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
-        RefChunks::new(self.as_ref_slice(), chunk_size)
+        RefChunks::<V, Data>::new(self.as_ref_slice(), chunk_size)
     }
 
     /// Returns an iterator over `chunk_size` elements of the dataset at a time,
@@ -321,7 +321,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     #[inline]
     pub fn chunks_exact(&self, chunk_size: usize) -> ChunksExact<V, Data> {
         let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
-        RefChunksExact::new(self.as_ref_slice(), chunk_size)
+        ChunksExact::<V, Data>::new(self.as_slice(), chunk_size)
     }
 
     /// Returns an iterator over `chunk_size` elements of the dataset at a time,
@@ -350,7 +350,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     #[inline]
     pub fn chunks_exact_ref(&mut self, chunk_size: usize) -> RefChunksExact<V, Data> {
         let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
-        RefChunksExact::new(self.as_ref_slice(), chunk_size)
+        RefChunksExact::<V, Data>::new(self.as_ref_slice(), chunk_size)
     }
 
     // TODO: rchunks(_exact)?(_ref)? : mark inline

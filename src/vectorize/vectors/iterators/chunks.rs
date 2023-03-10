@@ -1,28 +1,25 @@
 //! Iterator over chunks of `Vectors`' inner data
 
-use crate::vectorize::{data::VectorizedImpl, RefSlice, VectorInfo};
-use core::{hint::unreachable_unchecked, iter::FusedIterator, num::NonZeroUsize};
+use crate::vectorize::{data::VectorizedSliceImpl, VectorInfo, Vectorized, Vectors};
+use core::{iter::FusedIterator, num::NonZeroUsize};
 
-// FIXME: Implement non-Ref versions of these iterators, fix comments, fix ChunksExact impl
+// === VARIABLE-SIZE CHUNKS ===
 
-/// An iterator over [`Vectors`] in (non-overlapping) in-place chunks
-/// (`chunk_size` elements at a time), starting at the beginning of the dataset
-///
-/// When the dataset length is not evenly divided by the chunk size, the last
-/// slice of the iteration will be the remainder.
-///
-/// This struct is created by [`Vectors::chunks_mut()`].
-pub struct RefChunks<'vectors, V: VectorInfo, Data: VectorizedImpl<V> + 'vectors> {
-    remainder: Option<RefSlice<'vectors, V, Data>>,
+/// Common generic implementation behind Chunks and RefChunks
+pub struct GenericChunks<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> {
+    /// Remainder of the initial slice of output, or None if iteration is over
+    remainder: Option<Vectors<V, SliceData>>,
+
+    /// Size of the chunks that we're splitting
     chunk_size: NonZeroUsize,
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> RefChunks<'vectors, V, Data> {
+impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> GenericChunks<V, SliceData> {
     /// Set up a chunks iterator
     #[inline]
-    pub(crate) fn new(vectors: RefSlice<'vectors, V, Data>, chunk_size: NonZeroUsize) -> Self {
+    pub(crate) fn new(slice: Vectors<V, SliceData>, chunk_size: NonZeroUsize) -> Self {
         Self {
-            remainder: Some(vectors),
+            remainder: Some(slice),
             chunk_size,
         }
     }
@@ -34,8 +31,8 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> RefChunks<'vectors, V, Da
     }
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Iterator for RefChunks<'vectors, V, Data> {
-    type Item = RefSlice<'vectors, V, Data>;
+impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> Iterator for GenericChunks<V, SliceData> {
+    type Item = Vectors<V, SliceData>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -81,8 +78,8 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Iterator for RefChunks<'v
     }
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> DoubleEndedIterator
-    for RefChunks<'vectors, V, Data>
+impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> DoubleEndedIterator
+    for GenericChunks<V, SliceData>
 {
     #[inline(always)]
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -133,8 +130,8 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> DoubleEndedIterator
     }
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ExactSizeIterator
-    for RefChunks<'vectors, V, Data>
+impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> ExactSizeIterator
+    for GenericChunks<V, SliceData>
 {
     #[inline]
     fn len(&self) -> usize {
@@ -146,14 +143,14 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ExactSizeIterator
     }
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> FusedIterator
-    for RefChunks<'vectors, V, Data>
+impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> FusedIterator
+    for GenericChunks<V, SliceData>
 {
 }
 //
 #[cfg(feature = "iterator_ilp")]
-unsafe impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> iterator_ilp::TrustedLowerBound
-    for RefChunks<'vectors, V, Data>
+unsafe impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> iterator_ilp::TrustedLowerBound
+    for GenericChunks<V, SliceData>
 {
 }
 
@@ -161,67 +158,83 @@ unsafe impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> iterator_ilp::Trus
 /// elements at a time), starting at the beginning of the dataset
 ///
 /// When the dataset length is not evenly divided by the chunk size, the last
-/// up to `chunk_size-1` elements will be omitted but can be retrieved from the
-/// iterator using the `into_remainder()` function.
+/// slice of the iteration will be the remainder.
 ///
-/// This struct is created by [`Vectors::chunks_exact_mut()`].
-pub struct RefChunksExact<'vectors, V: VectorInfo, Data: VectorizedImpl<V> + 'vectors> {
-    regular: RefChunks<'vectors, V, Data>,
-    remainder: RefSlice<'vectors, V, Data>,
+/// This struct is created by [`Vectors::chunks()`].
+pub type Chunks<'vectors, V, Data> = GenericChunks<V, <Data as Vectorized<V>>::CopySlice<'vectors>>;
+
+/// An iterator over [`Vectors`] in (non-overlapping) chunks (`chunk_size`
+/// elements at a time), starting at the beginning of the dataset and providing
+/// mutable access to mutable elements of the dataset.
+///
+/// When the dataset length is not evenly divided by the chunk size, the last
+/// slice of the iteration will be the remainder.
+///
+/// This struct is created by [`Vectors::chunks_ref()`].
+pub type RefChunks<'vectors, V, Data> =
+    GenericChunks<V, <Data as Vectorized<V>>::RefSlice<'vectors>>;
+
+// === EXACT-SIZE CHUNKS ===
+
+// FIXME: Implement non-Ref versions of these iterators, fix comments, fix ChunksExact impl
+
+/// Common generic implementation behind ChunksExact and RefChunksExact
+pub struct GenericChunksExact<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> {
+    regular: GenericChunks<V, SliceData>,
+    remainder: Vectors<V, SliceData>,
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> RefChunksExact<'vectors, V, Data> {
+impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> GenericChunksExact<V, SliceData> {
     /// Set up an exact-size chunks iterator
     #[inline]
-    pub(crate) fn new(vectors: RefSlice<'vectors, V, Data>, chunk_size: NonZeroUsize) -> Self {
+    pub(crate) fn new(vectors: Vectors<V, SliceData>, chunk_size: NonZeroUsize) -> Self {
         let total_len = vectors.len();
         let remainder_len = total_len % chunk_size;
         let (regular_vectors, remainder) = if remainder_len > 0 {
             unsafe { vectors.split_at_unchecked(total_len - remainder_len) }
         } else {
-            (vectors, RefSlice::<'vectors, V, Data>::empty())
+            (vectors, Vectors::empty())
         };
         Self {
-            regular: RefChunks::new(regular_vectors, chunk_size),
+            regular: GenericChunks::new(regular_vectors, chunk_size),
             remainder,
         }
     }
 
-    /// Returns the remainder of the original dataset that is not going to be
-    /// returned by the iterator. The returned slice has at most `chunk_size-1`
-    /// elements.
+    /// Read-only view of the remainder of the original dataset that is not
+    /// going to be returned by the iterator. The returned slice has at most
+    /// `chunk_size-1` elements.
     #[inline]
-    pub fn into_remainder(self) -> RefSlice<'vectors, V, Data> {
+    pub fn remainder(&self) -> &Vectors<V, SliceData> {
+        &self.remainder
+    }
+
+    /// Reemainder of the original dataset that is not going to be returned by
+    /// the iterator. The returned slice has at most `chunk_size-1` elements.
+    #[inline]
+    pub fn into_remainder(self) -> Vectors<V, SliceData> {
         self.remainder
     }
 
-    /// Assert that any chunk returned by this iterator has the expected size
-    ///
-    /// # Safety
-    ///
-    /// The chunk must originate from `self.regular`, without further tampering
+    /// Assert that the underlying iterator emits slices of length chunk_size
     #[inline(always)]
-    unsafe fn assume_exact(
+    unsafe fn assume_regular(
         &self,
-        item: Option<<Self as Iterator>::Item>,
-    ) -> Option<<Self as Iterator>::Item> {
-        match item {
-            Some(item) if item.len() == self.regular.chunk_size() => Some(item),
-            None => None,
-            _ => unsafe { unreachable_unchecked() },
-        }
+        item: Option<Vectors<V, SliceData>>,
+    ) -> Option<Vectors<V, SliceData>> {
+        Some(unsafe { item?.split_at_unchecked(self.regular.chunk_size()).0 })
     }
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Iterator
-    for RefChunksExact<'vectors, V, Data>
+impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> Iterator
+    for GenericChunksExact<V, SliceData>
 {
-    type Item = RefSlice<'vectors, V, Data>;
+    type Item = Vectors<V, SliceData>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         let result = self.regular.next();
-        unsafe { self.assume_exact(result) }
+        unsafe { self.assume_regular(result) }
     }
 
     #[inline]
@@ -242,28 +255,28 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> Iterator
     #[inline]
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
         let result = self.regular.nth(n);
-        unsafe { self.assume_exact(result) }
+        unsafe { self.assume_regular(result) }
     }
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> DoubleEndedIterator
-    for RefChunksExact<'vectors, V, Data>
+impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> DoubleEndedIterator
+    for GenericChunksExact<V, SliceData>
 {
     #[inline(always)]
     fn next_back(&mut self) -> Option<Self::Item> {
         let result = self.regular.next_back();
-        unsafe { self.assume_exact(result) }
+        unsafe { self.assume_regular(result) }
     }
 
     #[inline]
     fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
         let result = self.regular.nth_back(n);
-        unsafe { self.assume_exact(result) }
+        unsafe { self.assume_regular(result) }
     }
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ExactSizeIterator
-    for RefChunksExact<'vectors, V, Data>
+impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> ExactSizeIterator
+    for GenericChunksExact<V, SliceData>
 {
     #[inline]
     fn len(&self) -> usize {
@@ -275,16 +288,39 @@ impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> ExactSizeIterator
     }
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> FusedIterator
-    for RefChunksExact<'vectors, V, Data>
+impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> FusedIterator
+    for GenericChunksExact<V, SliceData>
 {
 }
 //
 #[cfg(feature = "iterator_ilp")]
-unsafe impl<'vectors, V: VectorInfo, Data: VectorizedImpl<V>> iterator_ilp::TrustedLowerBound
-    for RefChunksExact<'vectors, V, Data>
+unsafe impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> iterator_ilp::TrustedLowerBound
+    for GenericChunksExact<V, SliceData>
 {
 }
+
+/// An iterator over [`Vectors`] in (non-overlapping) chunks (`chunk_size`
+/// elements at a time), starting at the beginning of the dataset
+///
+/// When the slice len is not evenly divided by the chunk size, the last up to
+/// `chunk_size-1` elements will be omitted but can be retrieved from the
+/// `remainder()` function from the iterator.
+///
+/// This struct is created by [`Vectors::chunks_exact()`].
+pub type ChunksExact<'vectors, V, Data> =
+    GenericChunksExact<V, <Data as Vectorized<V>>::CopySlice<'vectors>>;
+
+/// An iterator over [`Vectors`] in (non-overlapping) chunks (`chunk_size`
+/// elements at a time), starting at the beginning of the dataset and providing
+/// mutable access to mutable elements of the dataset.
+///
+/// When the slice len is not evenly divided by the chunk size, the last up to
+/// `chunk_size-1` elements will be omitted but can be retrieved from the
+/// `into_remainder()` function from the iterator.
+///
+/// This struct is created by [`Vectors::chunks_exact_ref()`].
+pub type RefChunksExact<'vectors, V, Data> =
+    GenericChunksExact<V, <Data as Vectorized<V>>::RefSlice<'vectors>>;
 
 // TODO: Windows
 
