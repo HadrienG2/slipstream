@@ -19,7 +19,7 @@ use core::{marker::PhantomData, num::NonZeroUsize};
 
 // NOTE: Remember to re-export these in the parent vectorize module
 pub use index::VectorIndex;
-pub use iterators::{ChunksExactMut, ChunksMut, IntoIter, IterMut};
+pub use iterators::{Chunks, ChunksExact, IntoIter, Iter, RefChunks, RefChunksExact, RefIter};
 
 /// SIMD data
 ///
@@ -64,16 +64,33 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
 
     /// Returns the first element, or None if the container is empty
     #[inline]
-    pub fn first_mut(&mut self) -> Option<Data::ElementRef<'_>> {
-        self.get_mut(0)
+    pub fn first(&self) -> Option<Data::ElementCopy> {
+        self.get(0)
+    }
+
+    /// Returns the first element, a mutable reference to it if the underlying
+    /// dataset is mutable, or None if the container is empty
+    #[inline]
+    pub fn first_ref(&mut self) -> Option<Data::ElementRef<'_>> {
+        self.get_ref(0)
     }
 
     /// Returns the first and all the rest of the elements of the container,
     /// or None if it is empty.
     #[inline(always)]
-    pub fn split_first_mut(&mut self) -> Option<(Data::ElementRef<'_>, SliceMut<V, Data>)> {
+    pub fn split_first(&self) -> Option<(Data::ElementCopy, Slice<V, Data>)> {
         (!self.is_empty()).then(move || {
-            let (head, tail) = unsafe { self.as_mut_slice().split_at_unchecked(1) };
+            let (head, tail) = unsafe { self.as_slice().split_at_unchecked(1) };
+            (head.into_iter().next().unwrap(), tail)
+        })
+    }
+
+    /// Returns the first and all the rest of the elements of the container,
+    /// or None if it is empty, allowing in-place access
+    #[inline(always)]
+    pub fn split_first_ref(&mut self) -> Option<(Data::ElementRef<'_>, RefSlice<V, Data>)> {
+        (!self.is_empty()).then(move || {
+            let (head, tail) = unsafe { self.as_ref_slice().split_at_unchecked(1) };
             (head.into_iter().next().unwrap(), tail)
         })
     }
@@ -81,18 +98,36 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     /// Returns the last and all the rest of the elements of the container,
     /// or None if it is empty.
     #[inline(always)]
-    pub fn split_last_mut(&mut self) -> Option<(Data::ElementRef<'_>, SliceMut<V, Data>)> {
+    pub fn split_last(&self) -> Option<(Data::ElementCopy, Slice<V, Data>)> {
         (!self.is_empty()).then(move || {
             let last = self.last_idx();
-            let (head, tail) = unsafe { self.as_mut_slice().split_at_unchecked(last) };
+            let (head, tail) = unsafe { self.as_slice().split_at_unchecked(last) };
+            (tail.into_iter().next().unwrap(), head)
+        })
+    }
+
+    /// Returns the last and all the rest of the elements of the container,
+    /// or None if it is empty, allowing in-place access.
+    #[inline(always)]
+    pub fn split_last_ref(&mut self) -> Option<(Data::ElementRef<'_>, RefSlice<V, Data>)> {
+        (!self.is_empty()).then(move || {
+            let last = self.last_idx();
+            let (head, tail) = unsafe { self.as_ref_slice().split_at_unchecked(last) };
             (tail.into_iter().next().unwrap(), head)
         })
     }
 
     /// Returns the last element, or None if the container is empty
     #[inline]
-    pub fn last_mut(&mut self) -> Option<Data::ElementRef<'_>> {
-        self.get_mut(self.last_idx())
+    pub fn last(&self) -> Option<Data::ElementCopy> {
+        self.get(self.last_idx())
+    }
+
+    /// Returns the last element, a mutable reference to it if the underlying
+    /// dataset is mutable, or None if the container is empty
+    #[inline]
+    pub fn last_ref(&mut self) -> Option<Data::ElementRef<'_>> {
+        self.get_ref(self.last_idx())
     }
 
     /// Index of the last element
@@ -101,7 +136,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
         self.len - 1
     }
 
-    /// Like [`get()`](Vectors::get()), but panics if index is out of range
+    /// Like [`get()`](Vectors::get_ref()), but panics if index is out of range
     ///
     /// # Panics
     ///
@@ -110,11 +145,27 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     // NOTE: We can't implement the real Index trait because it requires
     //       returning a &V that we don't have for padded/unaligned data.
     #[inline(always)]
-    pub fn index_mut<I>(&mut self, index: I) -> <I as VectorIndex<V, Data>>::OutputMut<'_>
+    pub fn index<I>(&self, index: I) -> <I as VectorIndex<V, Data>>::Output<'_>
     where
         I: VectorIndex<V, Data>,
     {
-        self.get_mut(index).expect("Index is out of range")
+        self.get(index).expect("Index is out of range")
+    }
+
+    /// Like [`get_ref()`](Vectors::get_ref()), but panics if index is out of range
+    ///
+    /// # Panics
+    ///
+    /// If index is out of range
+    //
+    // NOTE: We can't implement the real Index trait because it requires
+    //       returning a &V that we don't have for padded/unaligned data.
+    #[inline(always)]
+    pub fn index_ref<I>(&mut self, index: I) -> <I as VectorIndex<V, Data>>::RefOutput<'_>
+    where
+        I: VectorIndex<V, Data>,
+    {
+        self.get_ref(index).expect("Index is out of range")
     }
 
     /// Returns the specified element(s) of the container
@@ -122,17 +173,36 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     /// This operation accepts either a single `usize` index or a range of
     /// `usize` indices:
     ///
-    /// - Given a single index, it emits [`Data::ElementMut<'_>`](Vectorized::ElementMut).
-    /// - Given a range of indices, it emits [`Data::SliceMut<'_>`](Vectorized::Slice).
+    /// - Given a single index, it emits [`Data::ElementCopy`](Vectorized::ElementCopy).
+    /// - Given a range of indices, it emits [`Slice`].
     ///
     /// If one or more of the specified indices is out of range, None is
     /// returned.
     #[inline(always)]
-    pub fn get_mut<I>(&mut self, index: I) -> Option<<I as VectorIndex<V, Data>>::OutputMut<'_>>
+    pub fn get<I>(&self, index: I) -> Option<<I as VectorIndex<V, Data>>::Output<'_>>
     where
         I: VectorIndex<V, Data>,
     {
-        (index.is_valid_index(self)).then(move || unsafe { self.get_unchecked_mut(index) })
+        (index.is_valid_index(self)).then(move || unsafe { self.get_unchecked(index) })
+    }
+
+    /// Access the specified element(s) of the container, allowing in-place
+    /// mutation if possible.
+    ///
+    /// This operation accepts either a single `usize` index or a range of
+    /// `usize` indices:
+    ///
+    /// - Given a single index, it emits [`Data::ElementRef<'_>`](Vectorized::ElementRef).
+    /// - Given a range of indices, it emits [`RefSlice`]
+    ///
+    /// If one or more of the specified indices is out of range, None is
+    /// returned.
+    #[inline(always)]
+    pub fn get_ref<I>(&mut self, index: I) -> Option<<I as VectorIndex<V, Data>>::RefOutput<'_>>
+    where
+        I: VectorIndex<V, Data>,
+    {
+        (index.is_valid_index(self)).then(move || unsafe { self.get_unchecked_ref(index) })
     }
 
     /// Returns the specified element(s) of the container without bounds
@@ -142,21 +212,43 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     ///
     /// Indices covered by `index` must be in range `0..self.len()`
     #[inline(always)]
-    pub unsafe fn get_unchecked_mut<I>(
-        &mut self,
-        index: I,
-    ) -> <I as VectorIndex<V, Data>>::OutputMut<'_>
+    pub unsafe fn get_unchecked<I>(&self, index: I) -> <I as VectorIndex<V, Data>>::Output<'_>
     where
         I: VectorIndex<V, Data>,
     {
-        unsafe { index.get_unchecked_mut(self) }
+        unsafe { index.get_unchecked(self) }
+    }
+
+    /// Access the specified element(s) of the container without bounds
+    /// checking, allowing in-place mutation if possible
+    ///
+    /// # Safety
+    ///
+    /// Indices covered by `index` must be in range `0..self.len()`
+    #[inline(always)]
+    pub unsafe fn get_unchecked_ref<I>(
+        &mut self,
+        index: I,
+    ) -> <I as VectorIndex<V, Data>>::RefOutput<'_>
+    where
+        I: VectorIndex<V, Data>,
+    {
+        unsafe { index.get_unchecked_ref(self) }
+    }
+
+    /// Returns an iterator over copies of contained elements
+    #[inline]
+    pub fn iter(&self) -> Iter<V, Data> {
+        <&Self>::into_iter(self)
     }
 
     /// Returns an iterator over contained elements
     #[inline]
-    pub fn iter_mut(&mut self) -> IterMut<V, Data> {
+    pub fn iter_ref(&mut self) -> RefIter<V, Data> {
         <&mut Self>::into_iter(self)
     }
+
+    // TODO: windows: mark inline
 
     /// Returns an iterator over `chunk_size` elements of the dataset at a time,
     /// starting at the beginning of the dataset
@@ -176,9 +268,32 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     /// [`chunks_exact()`]: Vectors::chunks_exact()
     /// [`rchunks()`]: Vectors::rchunks()
     #[inline]
-    pub fn chunks_mut(&mut self, chunk_size: usize) -> ChunksMut<V, Data> {
+    pub fn chunks(&self, chunk_size: usize) -> Chunks<V, Data> {
         let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
-        ChunksMut::new(self.as_mut_slice(), chunk_size)
+        Chunks::new(self.as_slice(), chunk_size)
+    }
+
+    /// Returns an iterator over `chunk_size` elements of the dataset at a time,
+    /// starting at the beginning of the dataset and allowing mutation.
+    ///
+    /// The chunks are slices and do not overlap. If `chunk_size` does not
+    /// divide the length of the dataset, then the last chunk will not have
+    /// length `chunk_size`.
+    ///
+    /// See [`chunks_exact_ref()`] for a variant of this iterator that returns
+    /// chunks of always exactly `chunk_size` elements, and [`rchunks_ref()`] for
+    /// the same iterator but starting at the end of the slice.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `chunk_size` is 0.
+    ///
+    /// [`chunks_exact_ref()`]: Vectors::chunks_exact_ref()
+    /// [`rchunks_ref()`]: Vectors::rchunks_ref()
+    #[inline]
+    pub fn chunks_ref(&mut self, chunk_size: usize) -> RefChunks<V, Data> {
+        let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
+        RefChunks::new(self.as_ref_slice(), chunk_size)
     }
 
     /// Returns an iterator over `chunk_size` elements of the dataset at a time,
@@ -187,8 +302,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     /// The chunks are slices and do not overlap. If `chunk_size` does not
     /// divide the length of the dataset, then the last up to `chunk_size-1`
     /// elements will be omitted and can be retrieved from the
-    /// [`into_remainder()`](ChunksExact::into_remainder()) function of the
-    /// iterator.
+    /// [`remainder()`](ChunksExact::remainder()) function of the iterator.
     ///
     /// Due to each chunk having exactly `chunk_size` elements, the compiler can
     /// often optimize the resulting code better than in the case of
@@ -205,26 +319,70 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     /// [`chunks()`]: Vectors::chunks()
     /// [`rchunks()`]: Vectors::rchunks()
     #[inline]
-    pub fn chunks_exact_mut(&mut self, chunk_size: usize) -> ChunksExactMut<V, Data> {
+    pub fn chunks_exact(&self, chunk_size: usize) -> ChunksExact<V, Data> {
         let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
-        ChunksExactMut::new(self.as_mut_slice(), chunk_size)
+        RefChunksExact::new(self.as_ref_slice(), chunk_size)
     }
 
-    // TODO: rchunks(_exact)? : mark inline
+    /// Returns an iterator over `chunk_size` elements of the dataset at a time,
+    /// starting at the beginning of the dataset and allowing mutation
+    ///
+    /// The chunks are slices and do not overlap. If `chunk_size` does not
+    /// divide the length of the dataset, then the last up to `chunk_size-1`
+    /// elements will be omitted and can be retrieved from the
+    /// [`into_remainder()`](RefChunksExact::into_remainder()) function of the
+    /// iterator.
+    ///
+    /// Due to each chunk having exactly `chunk_size` elements, the compiler can
+    /// often optimize the resulting code better than in the case of
+    /// [`chunks_ref()`].
+    ///
+    /// See [`chunks_ref()`] for a variant of this iterator that also returns the
+    /// remainder as a smaller chunk, and [`rchunks_exact_ref()`] for the same
+    /// iterator but starting at the end of the slice.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `chunk_size` is 0.
+    ///
+    /// [`chunks_ref()`]: Vectors::chunks_ref()
+    /// [`rchunks_ref()`]: Vectors::rchunks_ref()
+    #[inline]
+    pub fn chunks_exact_ref(&mut self, chunk_size: usize) -> RefChunksExact<V, Data> {
+        let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
+        RefChunksExact::new(self.as_ref_slice(), chunk_size)
+    }
 
-    /// Extract a slice containing the entire dataset
+    // TODO: rchunks(_exact)?(_ref)? : mark inline
+
+    /// Extract a slice covering the entire dataset, with read-only access
     ///
     /// Equivalent to `self.index(..)`
     #[inline]
-    pub fn as_mut_slice(&mut self) -> SliceMut<V, Data> {
+    pub fn as_slice(&self) -> Slice<V, Data> {
+        unsafe { Vectors::from_raw_parts(self.data.as_slice(), self.len) }
+    }
+
+    /// Extract a slice covering the entire dataset, allowing in-place access
+    ///
+    /// Equivalent to `self.index(..)`
+    #[inline]
+    pub fn as_ref_slice(&mut self) -> RefSlice<V, Data> {
         unsafe { Vectors::from_raw_parts(self.data.as_ref_slice(), self.len) }
     }
 
     // TODO: Figure out inlining discipline for the following
-    // TODO: r?split(_inclusive)?, r?splitn,
+    // TODO: Comparison-based methods: r?split(_inclusive)?(_ref)?, r?splitn(_ref)?,
     //       contains, (starts|ends)_with,
-    //       (sort|select_nth|binary_search)(_unstable)?_by((_cached)?_key)?,
-    //       copy_from_slice (optimiser !), partition_point
+    //       (select_nth|binary_search)(_unstable)?_by((_cached)?_key)?,
+    //       partition_point
+    // TODO: is_ascii, eq_ignore_ascii_case, escape_ascii
+    // TODO: Methods that require dataset mutability and could only be
+    //       implemented for Vectors with an underlying mutable dataset (which
+    //       can be done via a requirement on ElementRef):
+    //       copy_from_slice, copy_within, make_ascii_(lower|upper)case, fill,
+    //       fill_with, reverse, rotate_left, rotate_right, sort(_unstable)?_by((_cached)?_key)?,
+    //       swap, swap_with_slice
 }
 //
 /// # Slice-specific methods
@@ -284,8 +442,11 @@ impl<V: VectorInfo, Data: VectorizedSliceImpl<V>> Vectors<V, Data> {
     }
 }
 
-/// Slice of [`Vectors`]
-pub type SliceMut<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::RefSlice<'a>>;
+/// Read-only slice of [`Vectors`]
+pub type Slice<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::CopySlice<'a>>;
+
+/// Slice of [`Vectors`] allowing in-place mutation
+pub type RefSlice<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::RefSlice<'a>>;
 
 /// Aligned SIMD data
 pub type AlignedVectors<V, Data> = Vectors<V, <Data as VectorizedImpl<V>>::Aligned>;

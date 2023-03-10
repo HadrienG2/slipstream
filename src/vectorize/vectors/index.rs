@@ -1,6 +1,9 @@
 //! Indexing of `Vectors`
 
-use crate::vectorize::{data::VectorizedImpl, SliceMut, VectorInfo, Vectors};
+use crate::vectorize::{
+    data::{VectorizedImpl, VectorizedSliceImpl},
+    RefSlice, Slice, VectorInfo, Vectors,
+};
 use core::ops::{Bound, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive};
 
 /// A helper trait used for [`Vectors`] indexing operations
@@ -12,33 +15,63 @@ use core::ops::{Bound, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, Ran
 ///
 /// Unsafe code can rely on this trait being implemented correctly
 pub unsafe trait VectorIndex<V: VectorInfo, Data: VectorizedImpl<V>> {
-    /// The output type returned by methods
-    type OutputMut<'out>
+    /// Truth that `self` is a valid index for `vectors`
+    fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool;
+
+    /// The output type returned by `get_unchecked`
+    ///
+    /// [`Data::ElementCopy`] if this is a single index, [`Slice`] if this is a
+    /// range of target indices.
+    ///
+    /// [`Data::ElementCopy`]: Vectorize::ElementCopy
+    type Output<'out>
     where
         Self: 'out,
         Data: 'out;
 
-    /// Truth that `self` is a valid index for `vectors`
-    fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool;
-
-    /// Perform unchecked indexing
+    /// Perform unchecked indexing, only providing read-only access
     ///
     /// # Safety
     ///
     /// `self` must be a valid index for `vectors` (see is_valid_index)
-    unsafe fn get_unchecked_mut(self, vectors: &mut Vectors<V, Data>) -> Self::OutputMut<'_>;
+    unsafe fn get_unchecked(self, vectors: &Vectors<V, Data>) -> Self::Output<'_>;
+
+    /// The output type returned by `get_unchecked_ref`
+    ///
+    /// [`Data::ElementRef`] if this is a single index, [`RefSlice`] if this is
+    /// a range of target indices.
+    ///
+    /// [`Data::ElementRef`]: Vectorize::ElementRef
+    type RefOutput<'out>
+    where
+        Self: 'out,
+        Data: 'out;
+
+    /// Perform unchecked indexing, allowing in-place data access
+    ///
+    /// # Safety
+    ///
+    /// `self` must be a valid index for `vectors` (see is_valid_index)
+    unsafe fn get_unchecked_ref(self, vectors: &mut Vectors<V, Data>) -> Self::RefOutput<'_>;
 }
 
 unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for usize {
-    type OutputMut<'out> = Data::ElementRef<'out> where Self: 'out, Data: 'out;
-
     #[inline(always)]
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
         *self < vectors.len()
     }
 
+    type Output<'out> = Data::ElementCopy where Self: 'out, Data: 'out;
+
     #[inline(always)]
-    unsafe fn get_unchecked_mut(self, vectors: &mut Vectors<V, Data>) -> Self::OutputMut<'_> {
+    unsafe fn get_unchecked(self, vectors: &Vectors<V, Data>) -> Self::Output<'_> {
+        unsafe { vectors.data.get_unchecked(self, self == vectors.last_idx()) }
+    }
+
+    type RefOutput<'out> = Data::ElementRef<'out> where Self: 'out, Data: 'out;
+
+    #[inline(always)]
+    unsafe fn get_unchecked_ref(self, vectors: &mut Vectors<V, Data>) -> Self::RefOutput<'_> {
         unsafe {
             vectors
                 .data
@@ -48,50 +81,98 @@ unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for usi
 }
 
 unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeFull {
-    type OutputMut<'out> = SliceMut<'out, V, Data> where Self: 'out, Data: 'out;
-
     #[inline]
     fn is_valid_index(&self, _vectors: &Vectors<V, Data>) -> bool {
         true
     }
 
+    type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
+
     #[inline]
-    unsafe fn get_unchecked_mut(self, vectors: &mut Vectors<V, Data>) -> Self::OutputMut<'_> {
-        vectors.as_mut_slice()
+    unsafe fn get_unchecked(self, vectors: &Vectors<V, Data>) -> Self::Output<'_> {
+        vectors.as_slice()
+    }
+
+    type RefOutput<'out> = RefSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+    #[inline]
+    unsafe fn get_unchecked_ref(self, vectors: &mut Vectors<V, Data>) -> Self::RefOutput<'_> {
+        vectors.as_ref_slice()
     }
 }
 
-unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeFrom<usize> {
-    type OutputMut<'out> = SliceMut<'out, V, Data> where Self: 'out, Data: 'out;
+// Implementation of get_unchecked for RangeFrom
+unsafe fn get_range_from_unchecked<V: VectorInfo, Data: VectorizedSliceImpl<V>>(
+    slice: Vectors<V, Data>,
+    start: usize,
+) -> Vectors<V, Data> {
+    unsafe { slice.split_at_unchecked(start) }.1
+}
 
+unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeFrom<usize> {
     #[inline]
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
         self.start < vectors.len()
     }
 
+    type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
+
     #[inline]
-    unsafe fn get_unchecked_mut(self, vectors: &mut Vectors<V, Data>) -> Self::OutputMut<'_> {
-        unsafe { vectors.as_mut_slice().split_at_unchecked(self.start) }.1
+    unsafe fn get_unchecked(self, vectors: &Vectors<V, Data>) -> Self::Output<'_> {
+        unsafe { get_range_from_unchecked(vectors.as_slice(), self.start) }
+    }
+
+    type RefOutput<'out> = RefSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+    #[inline]
+    unsafe fn get_unchecked_ref(self, vectors: &mut Vectors<V, Data>) -> Self::RefOutput<'_> {
+        unsafe { get_range_from_unchecked(vectors.as_ref_slice(), self.start) }
     }
 }
 
-unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeTo<usize> {
-    type OutputMut<'out> = SliceMut<'out, V, Data> where Self: 'out, Data: 'out;
+// Implementation of get_unchecked for RangeTo
+unsafe fn get_range_to_unchecked<V: VectorInfo, Data: VectorizedSliceImpl<V>>(
+    slice: Vectors<V, Data>,
+    end: usize,
+) -> Vectors<V, Data> {
+    unsafe { slice.split_at_unchecked(end) }.0
+}
 
+unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeTo<usize> {
     #[inline]
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
         self.end <= vectors.len()
     }
 
+    type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
+
     #[inline]
-    unsafe fn get_unchecked_mut(self, vectors: &mut Vectors<V, Data>) -> Self::OutputMut<'_> {
-        unsafe { vectors.as_mut_slice().split_at_unchecked(self.end) }.0
+    unsafe fn get_unchecked(self, vectors: &Vectors<V, Data>) -> Self::Output<'_> {
+        unsafe { get_range_to_unchecked(vectors.as_slice(), self.end) }
+    }
+
+    type RefOutput<'out> = RefSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+    #[inline]
+    unsafe fn get_unchecked_ref(self, vectors: &mut Vectors<V, Data>) -> Self::RefOutput<'_> {
+        unsafe { get_range_to_unchecked(vectors.as_ref_slice(), self.end) }
+    }
+}
+
+// Implementation of get_unchecked for Range
+unsafe fn get_range_unchecked<V: VectorInfo, Data: VectorizedSliceImpl<V>>(
+    slice: Vectors<V, Data>,
+    range: Range<usize>,
+) -> Vectors<V, Data> {
+    if range.start < range.end {
+        let after_start = unsafe { slice.split_at_unchecked(range.start) }.1;
+        unsafe { after_start.split_at_unchecked(range.end - range.start) }.0
+    } else {
+        Vectors::empty()
     }
 }
 
 unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for Range<usize> {
-    type OutputMut<'out> = SliceMut<'out, V, Data> where Self: 'out, Data: 'out;
-
     #[inline]
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
         if self.start < self.end {
@@ -101,20 +182,35 @@ unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for Ran
         }
     }
 
+    type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
+
     #[inline]
-    unsafe fn get_unchecked_mut(self, vectors: &mut Vectors<V, Data>) -> Self::OutputMut<'_> {
-        if self.start < self.end {
-            let after_start = unsafe { vectors.as_mut_slice().split_at_unchecked(self.start) }.1;
-            unsafe { after_start.split_at_unchecked(self.end - self.start) }.0
-        } else {
-            Self::OutputMut::empty()
-        }
+    unsafe fn get_unchecked(self, vectors: &Vectors<V, Data>) -> Self::Output<'_> {
+        get_range_unchecked(vectors.as_slice(), self)
+    }
+
+    type RefOutput<'out> = RefSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+    #[inline]
+    unsafe fn get_unchecked_ref(self, vectors: &mut Vectors<V, Data>) -> Self::RefOutput<'_> {
+        get_range_unchecked(vectors.as_ref_slice(), self)
+    }
+}
+
+// Implementation of get_unchecked for RangeInclusive
+unsafe fn get_range_inclusive_unchecked<V: VectorInfo, Data: VectorizedSliceImpl<V>>(
+    slice: Vectors<V, Data>,
+    range: RangeInclusive<usize>,
+) -> Vectors<V, Data> {
+    let (&start, &end) = (range.start(), range.end());
+    if end == usize::MAX {
+        core::hint::unreachable_unchecked()
+    } else {
+        get_range_unchecked(slice, start..end + 1)
     }
 }
 
 unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeInclusive<usize> {
-    type OutputMut<'out> = SliceMut<'out, V, Data> where Self: 'out, Data: 'out;
-
     #[inline]
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
         let (&start, &end) = (self.start(), self.end());
@@ -125,38 +221,74 @@ unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for Ran
         }
     }
 
+    type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
+
     #[inline]
-    unsafe fn get_unchecked_mut(self, vectors: &mut Vectors<V, Data>) -> Self::OutputMut<'_> {
-        let (&start, &end) = (self.start(), self.end());
-        if end == usize::MAX {
-            core::hint::unreachable_unchecked()
-        } else {
-            (start..end + 1).get_unchecked_mut(vectors)
-        }
+    unsafe fn get_unchecked(self, vectors: &Vectors<V, Data>) -> Self::Output<'_> {
+        get_range_inclusive_unchecked(vectors.as_slice(), self)
+    }
+
+    type RefOutput<'out> = RefSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+    #[inline]
+    unsafe fn get_unchecked_ref(self, vectors: &mut Vectors<V, Data>) -> Self::RefOutput<'_> {
+        get_range_inclusive_unchecked(vectors.as_ref_slice(), self)
     }
 }
 
 unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data>
     for RangeToInclusive<usize>
 {
-    type OutputMut<'out> = SliceMut<'out, V, Data> where Self: 'out, Data: 'out;
-
     #[inline]
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
         (0..=self.end).is_valid_index(vectors)
     }
 
+    type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
+
     #[inline]
-    unsafe fn get_unchecked_mut(self, vectors: &mut Vectors<V, Data>) -> Self::OutputMut<'_> {
-        (0..=self.end).get_unchecked_mut(vectors)
+    unsafe fn get_unchecked(self, vectors: &Vectors<V, Data>) -> Self::Output<'_> {
+        (0..=self.end).get_unchecked(vectors)
     }
+
+    type RefOutput<'out> = RefSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+    #[inline]
+    unsafe fn get_unchecked_ref(self, vectors: &mut Vectors<V, Data>) -> Self::RefOutput<'_> {
+        (0..=self.end).get_unchecked_ref(vectors)
+    }
+}
+
+// Implementation of get_unchecked for raw pair of bounds
+unsafe fn get_bounds_unchecked<V: VectorInfo, Data: VectorizedSliceImpl<V>>(
+    slice: Vectors<V, Data>,
+    lower: Bound<usize>,
+    upper: Bound<usize>,
+) -> Vectors<V, Data> {
+    let (lower_excluded, upper) = match (lower, upper) {
+        (Bound::Included(s), Bound::Included(e)) => {
+            return get_range_inclusive_unchecked(slice, s..=e)
+        }
+        (Bound::Included(s), Bound::Excluded(e)) => return get_range_unchecked(slice, s..e),
+        (Bound::Included(s), Bound::Unbounded) => return get_range_from_unchecked(slice, s),
+        (Bound::Unbounded, Bound::Included(e)) => {
+            return get_range_inclusive_unchecked(slice, 0..=e)
+        }
+        (Bound::Unbounded, Bound::Excluded(e)) => return get_range_to_unchecked(slice, e),
+        (Bound::Unbounded, Bound::Unbounded) => return slice,
+        (Bound::Excluded(s), upper) => (s, upper),
+    };
+    let lower_included = if lower_excluded == usize::MAX {
+        core::hint::unreachable_unchecked()
+    } else {
+        lower_excluded + 1
+    };
+    get_bounds_unchecked(slice, Bound::Included(lower_included), upper)
 }
 
 unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data>
     for (Bound<usize>, Bound<usize>)
 {
-    type OutputMut<'out> = SliceMut<'out, V, Data> where Self: 'out, Data: 'out;
-
     #[inline]
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
         let (lower_excluded, upper) = match (self.0, self.1) {
@@ -176,23 +308,18 @@ unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data>
         (Bound::Included(lower_included), upper).is_valid_index(vectors)
     }
 
+    type Output<'out> = Slice<'out, V, Data> where Self: 'out, Data: 'out;
+
     #[inline]
-    unsafe fn get_unchecked_mut(self, vectors: &mut Vectors<V, Data>) -> Self::OutputMut<'_> {
-        let (lower_excluded, upper) = match (self.0, self.1) {
-            (Bound::Included(s), Bound::Included(e)) => return (s..=e).get_unchecked_mut(vectors),
-            (Bound::Included(s), Bound::Excluded(e)) => return (s..e).get_unchecked_mut(vectors),
-            (Bound::Included(s), Bound::Unbounded) => return (s..).get_unchecked_mut(vectors),
-            (Bound::Unbounded, Bound::Included(e)) => return (..=e).get_unchecked_mut(vectors),
-            (Bound::Unbounded, Bound::Excluded(e)) => return (..e).get_unchecked_mut(vectors),
-            (Bound::Unbounded, Bound::Unbounded) => return (..).get_unchecked_mut(vectors),
-            (Bound::Excluded(s), upper) => (s, upper),
-        };
-        let lower_included = if lower_excluded == usize::MAX {
-            core::hint::unreachable_unchecked()
-        } else {
-            lower_excluded + 1
-        };
-        (Bound::Included(lower_included), upper).get_unchecked_mut(vectors)
+    unsafe fn get_unchecked(self, vectors: &Vectors<V, Data>) -> Self::Output<'_> {
+        get_bounds_unchecked(vectors.as_slice(), self.0, self.1)
+    }
+
+    type RefOutput<'out> = RefSlice<'out, V, Data> where Self: 'out, Data: 'out;
+
+    #[inline]
+    unsafe fn get_unchecked_ref(self, vectors: &mut Vectors<V, Data>) -> Self::RefOutput<'_> {
+        get_bounds_unchecked(vectors.as_ref_slice(), self.0, self.1)
     }
 }
 

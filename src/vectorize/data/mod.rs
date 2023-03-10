@@ -81,7 +81,7 @@ pub unsafe trait Vectorized<V: VectorInfo>: Sized {
 
     /// Mutably borrowed slice of this dataset
     ///
-    /// Returned by methods that borrow a subset of `Vectors` from &mut self.
+    /// Returned by methods that borrow a subset of `&mut Vectors`.
     type RefSlice<'result>: Vectorized<V, Element = Self::ElementRef<'result>, ElementCopy = Self::ElementCopy>
         + VectorizedSliceImpl<V>
         + Debug
@@ -90,7 +90,7 @@ pub unsafe trait Vectorized<V: VectorInfo>: Sized {
 
     /// Read-only slice of this dataset
     ///
-    /// Returned by methods that borrow a subset of `Vectors` from &self.
+    /// Returned by methods that borrow a subset of `&Vectors`.
     type CopySlice<'result>: Vectorized<V, Element = Self::ElementCopy, ElementCopy = Self::ElementCopy>
         + VectorizedSliceImpl<V>
         + Copy
@@ -148,7 +148,7 @@ pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
     ///   slice is being accessed.
     unsafe fn get_unchecked(&self, idx: usize, is_last: bool) -> Self::ElementCopy;
 
-    /// Like `get_unchecked`, but provides in-place access to the underlying
+    /// Like `get_unchecked`, but allows in-place mutation of the underlying
     /// dataset if possible (underlying slice or collection is &mut).
     ///
     /// # Safety
@@ -164,7 +164,7 @@ pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
     /// mutable data into read-only data and owned data into slices.
     fn as_slice(&self) -> Self::CopySlice<'_>;
 
-    /// Turn this data into the equivalent mutable slice
+    /// Turn this data into the equivalent slice, allowing in-place access
     ///
     /// Lifetime-shrinking no-op if Self is already a slice, but turns
     /// owned data into slices.
