@@ -373,7 +373,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
 
     /// Extract a slice covering the entire dataset, allowing in-place access
     ///
-    /// Equivalent to `self.index(..)`
+    /// Equivalent to `self.index_ref(..)`
     #[inline]
     pub fn as_ref_slice(&mut self) -> RefSlice<V, Data> {
         unsafe { Vectors::from_raw_parts(self.data.as_ref_slice(), self.len) }
