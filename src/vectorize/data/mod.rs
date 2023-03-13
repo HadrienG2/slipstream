@@ -1,8 +1,8 @@
 //! SIMD data access
 //!
-//! This module implements the Vectorized trait family, whose purpose is to let
-//! you treat slices and containers of `Vector`s and scalar elements as if they
-//! were slices of `Vector`s.
+//! This module implements the VectorizedData trait family, whose purpose is to
+//! let you treat slices and containers of `Vector`s and scalar elements as if
+//! they were slices of `Vector`s.
 //!
 //! It is focused on the low-level unsafe plumbing needed to perform this data
 //! reinterpretation. The high-level API that users invoke to manipulate the
@@ -56,7 +56,7 @@ pub use mutation::{PaddedMut, UnalignedMut};
 /// as part of their safety proofs. The definition of "correct" is an
 /// implementation detail of this crate, therefore this trait should not
 /// be implemented outside of this crate.
-pub unsafe trait Vectorized<V: VectorInfo>: Sized {
+pub unsafe trait VectorizedData<V: VectorInfo>: Sized {
     /// Owned element of the output [`Vectors`] collection
     ///
     /// Yielded by the `IntoIterator` impl that consumes the collection.
@@ -82,7 +82,7 @@ pub unsafe trait Vectorized<V: VectorInfo>: Sized {
     /// Mutably borrowed slice of this dataset
     ///
     /// Returned by methods that borrow a subset of `&mut Vectors`.
-    type RefSlice<'result>: Vectorized<V, Element = Self::ElementRef<'result>, ElementCopy = Self::ElementCopy>
+    type RefSlice<'result>: VectorizedData<V, Element = Self::ElementRef<'result>, ElementCopy = Self::ElementCopy>
         + VectorizedSliceImpl<V>
         + Debug
     where
@@ -91,7 +91,7 @@ pub unsafe trait Vectorized<V: VectorInfo>: Sized {
     /// Read-only slice of this dataset
     ///
     /// Returned by methods that borrow a subset of `&Vectors`.
-    type CopySlice<'result>: Vectorized<V, Element = Self::ElementCopy, ElementCopy = Self::ElementCopy>
+    type CopySlice<'result>: VectorizedData<V, Element = Self::ElementCopy, ElementCopy = Self::ElementCopy>
         + VectorizedSliceImpl<V>
         + Copy
         + Debug
@@ -118,9 +118,9 @@ pub unsafe trait Vectorized<V: VectorInfo>: Sized {
 /// # Safety
 ///
 /// Unsafe code may rely on the correctness of implementations of this trait
-/// and the higher-level `Vectorized` trait as part of their safety proofs.
+/// and the higher-level `VectorizedData` trait as part of their safety proofs.
 ///
-/// The safety preconditions on `Vectorized` are that `Element` should
+/// The safety preconditions on `VectorizedData` are that `Element` should
 /// not outlive `Self`, and that it should be safe to transmute `ElementMut`
 /// to `Element` in scenarios where either `Element` is `Copy` or the
 /// transmute is abstracted in such a way that the user cannot abuse it to
@@ -130,10 +130,10 @@ pub unsafe trait Vectorized<V: VectorInfo>: Sized {
 /// Further, `Slice::ElementMut` should be pretty much the same GAT as
 /// `Self::ElementMut`, with just a different `Self` lifetime bound.
 ///
-/// Finally, a `Vectorized` impl is only allowed to implement `Copy` if
+/// Finally, a `VectorizedData` impl is only allowed to implement `Copy` if
 /// the source container type is `Copy` (i.e. not &mut container).
 #[doc(hidden)]
-pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
+pub unsafe trait VectorizedDataImpl<V: VectorInfo>: VectorizedData<V> + Sized {
     /// Get a copy of the slice element at index `idx` without bounds
     /// checking, adding scalar padding values if data is missing at the
     /// end of the target vector.
@@ -171,7 +171,7 @@ pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
     fn as_ref_slice(&mut self) -> Self::RefSlice<'_>;
 
     /// Reinterpretation of this data as SIMD data that may not be aligned
-    type Unaligned: Vectorized<V> + VectorizedImpl<V>;
+    type Unaligned: VectorizedData<V> + VectorizedDataImpl<V>;
 
     /// Unsafely cast this data to the equivalent slice or collection of
     /// unaligned `Vector`s
@@ -183,7 +183,7 @@ pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
     unsafe fn into_unaligned_unchecked(self) -> Self::Unaligned;
 
     /// Reinterpretation of this data as SIMD data with optimal layout
-    type Aligned: Vectorized<V> + VectorizedImpl<V>;
+    type Aligned: VectorizedData<V> + VectorizedDataImpl<V>;
 
     /// Unsafely cast this data to the equivalent slice or collection of Vector.
     ///
@@ -194,11 +194,11 @@ pub unsafe trait VectorizedImpl<V: VectorInfo>: Vectorized<V> + Sized {
     unsafe fn into_aligned_unchecked(self) -> Self::Aligned;
 }
 
-/// `VectorizedImpl` that is a true slice, i.e. does not own its elements
+/// `VectorizedDataImpl` that is a true slice, i.e. does not own its elements
 /// and can be split
 #[doc(hidden)]
 pub unsafe trait VectorizedSliceImpl<V: VectorInfo>:
-    VectorizedImpl<V> + Sized + Debug
+    VectorizedDataImpl<V> + Sized + Debug
 {
     /// Construct an empty slice
     fn empty() -> Self;
@@ -304,7 +304,7 @@ impl<V: VectorInfo> Pointer for AlignedData<'_, V> {
     }
 }
 //
-unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedData<'target, V> {
+unsafe impl<'target, V: VectorInfo> VectorizedData<V> for AlignedData<'target, V> {
     type Element = V;
     type ElementRef<'result> = V where Self: 'result;
     type ElementCopy = V;
@@ -312,7 +312,7 @@ unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedData<'target, V> {
     type CopySlice<'result> = AlignedData<'result, V> where Self: 'result;
 }
 //
-unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedData<'target, V> {
+unsafe impl<'target, V: VectorInfo> VectorizedDataImpl<V> for AlignedData<'target, V> {
     #[inline(always)]
     unsafe fn get_unchecked(&self, idx: usize, _is_last: bool) -> V {
         unsafe { *self.get_ptr(idx).as_ref() }
@@ -361,7 +361,7 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for AlignedData<'targ
 
 // Owned arrays of Vector must be stored as-is in the Vectors collection,
 // but otherwise behave like &[Vector]
-unsafe impl<V: VectorInfo, const SIZE: usize> Vectorized<V> for [V; SIZE] {
+unsafe impl<V: VectorInfo, const SIZE: usize> VectorizedData<V> for [V; SIZE] {
     type Element = V;
     type ElementRef<'result> = V where Self: 'result;
     type ElementCopy = V;
@@ -369,7 +369,7 @@ unsafe impl<V: VectorInfo, const SIZE: usize> Vectorized<V> for [V; SIZE] {
     type CopySlice<'result> = AlignedData<'result, V> where Self: 'result;
 }
 //
-unsafe impl<V: VectorInfo, const SIZE: usize> VectorizedImpl<V> for [V; SIZE] {
+unsafe impl<V: VectorInfo, const SIZE: usize> VectorizedDataImpl<V> for [V; SIZE] {
     #[inline(always)]
     unsafe fn get_unchecked(&self, idx: usize, _is_last: bool) -> V {
         unsafe { *<[V]>::get_unchecked(&self[..], idx) }
@@ -466,7 +466,7 @@ impl<'target, V: VectorInfo> Pointer for AlignedDataMut<'target, V> {
     }
 }
 //
-unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedDataMut<'target, V> {
+unsafe impl<'target, V: VectorInfo> VectorizedData<V> for AlignedDataMut<'target, V> {
     type Element = &'target mut V;
     type ElementRef<'result> = &'result mut V where Self: 'result;
     type ElementCopy = V;
@@ -474,7 +474,7 @@ unsafe impl<'target, V: VectorInfo> Vectorized<V> for AlignedDataMut<'target, V>
     type CopySlice<'result> = AlignedData<'result, V> where Self: 'result;
 }
 //
-unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for AlignedDataMut<'target, V> {
+unsafe impl<'target, V: VectorInfo> VectorizedDataImpl<V> for AlignedDataMut<'target, V> {
     #[inline(always)]
     unsafe fn get_unchecked(&self, idx: usize, is_last: bool) -> V {
         unsafe { self.0.get_unchecked(idx, is_last) }
@@ -603,7 +603,7 @@ impl<V: VectorInfo> Pointer for UnalignedData<'_, V> {
     }
 }
 //
-unsafe impl<'target, V: VectorInfo> Vectorized<V> for UnalignedData<'target, V> {
+unsafe impl<'target, V: VectorInfo> VectorizedData<V> for UnalignedData<'target, V> {
     type Element = V;
     type ElementRef<'result> = V where Self: 'result;
     type ElementCopy = V;
@@ -611,7 +611,7 @@ unsafe impl<'target, V: VectorInfo> Vectorized<V> for UnalignedData<'target, V> 
     type CopySlice<'result> = UnalignedData<'result, V> where Self: 'result;
 }
 //
-unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedData<'target, V> {
+unsafe impl<'target, V: VectorInfo> VectorizedDataImpl<V> for UnalignedData<'target, V> {
     #[inline(always)]
     unsafe fn get_unchecked(&self, idx: usize, _is_last: bool) -> V {
         unsafe { *self.get_ptr(idx).as_ref() }.into()
@@ -729,7 +729,7 @@ impl<'target, V: VectorInfo> Pointer for UnalignedDataMut<'target, V> {
     }
 }
 //
-unsafe impl<'target, V: VectorInfo> Vectorized<V> for UnalignedDataMut<'target, V> {
+unsafe impl<'target, V: VectorInfo> VectorizedData<V> for UnalignedDataMut<'target, V> {
     type Element = Self::ElementRef<'target>;
     type ElementRef<'result> = UnalignedMut<'result, V> where Self: 'result;
     type ElementCopy = V;
@@ -737,7 +737,7 @@ unsafe impl<'target, V: VectorInfo> Vectorized<V> for UnalignedDataMut<'target, 
     type CopySlice<'result> = UnalignedData<'result, V> where Self: 'result;
 }
 //
-unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for UnalignedDataMut<'target, V> {
+unsafe impl<'target, V: VectorInfo> VectorizedDataImpl<V> for UnalignedDataMut<'target, V> {
     #[inline(always)]
     unsafe fn get_unchecked(&self, idx: usize, is_last: bool) -> V {
         unsafe { self.0.get_unchecked(idx, is_last) }
@@ -881,7 +881,7 @@ impl<'target, V: VectorInfo> Pointer for PaddedData<'target, V> {
     }
 }
 //
-unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedData<'target, V> {
+unsafe impl<'target, V: VectorInfo> VectorizedData<V> for PaddedData<'target, V> {
     type Element = V;
     type ElementRef<'result> = V where Self: 'result;
     type ElementCopy = V;
@@ -889,7 +889,7 @@ unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedData<'target, V> {
     type CopySlice<'result> = PaddedData<'result, V> where Self: 'result;
 }
 //
-unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedData<'target, V> {
+unsafe impl<'target, V: VectorInfo> VectorizedDataImpl<V> for PaddedData<'target, V> {
     #[inline(always)]
     unsafe fn get_unchecked(&self, idx: usize, is_last: bool) -> V {
         if is_last {
@@ -961,7 +961,7 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for PaddedData<'targe
 }
 
 // NOTE: Can't implement support for [Scalar; SIZE] yet due to const
-//       generics limitations (Vectorized::Aligned should be
+//       generics limitations (VectorizedDataImpl::Aligned should be
 //       [Vector; { SIZE / Vector::LANES }], but array lengths derived from
 //       generic parameters are not allowed yet).
 
@@ -1029,7 +1029,7 @@ impl<'target, V: VectorInfo> Pointer for PaddedDataMut<'target, V> {
     }
 }
 //
-unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedDataMut<'target, V> {
+unsafe impl<'target, V: VectorInfo> VectorizedData<V> for PaddedDataMut<'target, V> {
     type Element = PaddedMut<'target, V>;
     type ElementRef<'result> = PaddedMut<'result, V> where Self: 'result;
     type ElementCopy = V;
@@ -1037,7 +1037,7 @@ unsafe impl<'target, V: VectorInfo> Vectorized<V> for PaddedDataMut<'target, V> 
     type CopySlice<'result> = PaddedData<'result, V> where Self: 'result;
 }
 //
-unsafe impl<'target, V: VectorInfo> VectorizedImpl<V> for PaddedDataMut<'target, V> {
+unsafe impl<'target, V: VectorInfo> VectorizedDataImpl<V> for PaddedDataMut<'target, V> {
     #[inline(always)]
     unsafe fn get_unchecked(&self, idx: usize, is_last: bool) -> V {
         unsafe { self.inner.get_unchecked(idx, is_last) }
@@ -1121,8 +1121,8 @@ macro_rules! impl_vectorized_for_tuple {
         unsafe impl<
             'target,
             V: VectorInfo
-            $(, $t: Vectorized<V> + 'target)*
-        > Vectorized<V> for ($($t,)*) {
+            $(, $t: VectorizedData<V> + 'target)*
+        > VectorizedData<V> for ($($t,)*) {
             type Element = ($($t::Element,)*);
             type ElementRef<'result> = ($($t::ElementRef<'result>,)*) where Self: 'result;
             type ElementCopy = ($($t::ElementCopy,)*);
@@ -1134,8 +1134,8 @@ macro_rules! impl_vectorized_for_tuple {
         unsafe impl<
             'target,
             V: VectorInfo
-            $(, $t: VectorizedImpl<V> + 'target)*
-        > VectorizedImpl<V> for ($($t,)*) {
+            $(, $t: VectorizedDataImpl<V> + 'target)*
+        > VectorizedDataImpl<V> for ($($t,)*) {
             #[inline(always)]
             unsafe fn get_unchecked(
                 &self,
@@ -1603,7 +1603,7 @@ pub(crate) mod tests {
             + PartialEq<StaticData>
             + PartialEq<StaticDataMut>
             + Pointer
-            + VectorizedImpl<V>,
+            + VectorizedDataImpl<V>,
     >(
         slice_ptr: NonNull<[Target]>,
         data: Data,
@@ -1698,7 +1698,7 @@ pub(crate) mod tests {
         #[test]
         fn init_array(mut data in any_aligned_array()) {
             let data_ptr = |data: &AlignedArray| NonNull::from(data).cast::<V>();
-            let slice = <AlignedArray as VectorizedImpl<V>>::as_ref_slice;
+            let slice = <AlignedArray as VectorizedDataImpl<V>>::as_ref_slice;
 
             let mut aligned = unsafe { data.into_aligned_unchecked() };
             let mut unaligned = unsafe { data.into_unaligned_unchecked() };
@@ -1948,8 +1948,8 @@ pub(crate) mod tests {
         fn get_array((mut data, idx) in any_aligned_array().prop_flat_map(with_data_index)) {
             let elem = data.simd_element(idx);
             let is_last = data.is_last(idx);
-            assert_eq!(unsafe { VectorizedImpl::get_unchecked(&data, idx, is_last) }, elem);
-            assert_eq!(unsafe { VectorizedImpl::get_unchecked_ref(&mut data, idx, is_last) }, elem);
+            assert_eq!(unsafe { VectorizedDataImpl::get_unchecked(&data, idx, is_last) }, elem);
+            assert_eq!(unsafe { VectorizedDataImpl::get_unchecked_ref(&mut data, idx, is_last) }, elem);
         }
 
         /// Test the get_unchecked and get_ptr of UnalignedData(Mut)?

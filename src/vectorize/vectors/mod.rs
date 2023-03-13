@@ -1,6 +1,6 @@
 //! SIMD data collection
 //!
-//! This module builds upon the `Vectorized` abstraction to provide the
+//! This module builds upon the `VectorizedData` abstraction to provide the
 //! `Vectors` type, a `[Vector]`-like view of a heterogeneous data set
 //! composed of slices and containers of `Vector`s and scalar elements.
 //!
@@ -10,8 +10,8 @@ mod index;
 mod iterators;
 
 use super::{
-    data::{VectorizedImpl, VectorizedSliceImpl},
-    VectorInfo, Vectorized,
+    data::{VectorizedDataImpl, VectorizedSliceImpl},
+    VectorInfo, VectorizedData,
 };
 #[cfg(doc)]
 use crate::{vectorize::Vectorizable, Vector};
@@ -37,13 +37,13 @@ pub use iterators::{
 /// with iteration and indexing operations yielding the type that is
 /// described in the documentation of [`Vectorizable`].
 #[derive(Copy, Clone)]
-pub struct Vectors<V: VectorInfo, Data: VectorizedImpl<V>> {
+pub struct Vectors<V: VectorInfo, Data: VectorizedDataImpl<V>> {
     data: Data,
     len: usize,
     vectors: PhantomData<V>,
 }
 //
-impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
+impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectors<V, Data> {
     /// Create a SIMD data container
     ///
     /// # Safety
@@ -181,7 +181,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     /// This operation accepts either a single `usize` index or a range of
     /// `usize` indices:
     ///
-    /// - Given a single index, it emits [`Data::ElementCopy`](Vectorized::ElementCopy).
+    /// - Given a single index, it emits [`Data::ElementCopy`](VectorizedData::ElementCopy).
     /// - Given a range of indices, it emits [`Slice`].
     ///
     /// If one or more of the specified indices is out of range, None is
@@ -200,7 +200,7 @@ impl<V: VectorInfo, Data: VectorizedImpl<V>> Vectors<V, Data> {
     /// This operation accepts either a single `usize` index or a range of
     /// `usize` indices:
     ///
-    /// - Given a single index, it emits [`Data::ElementRef<'_>`](Vectorized::ElementRef).
+    /// - Given a single index, it emits [`Data::ElementRef<'_>`](VectorizedData::ElementRef).
     /// - Given a range of indices, it emits [`RefSlice`]
     ///
     /// If one or more of the specified indices is out of range, None is
@@ -451,7 +451,7 @@ impl<V: VectorInfo, Data: VectorizedSliceImpl<V>> Vectors<V, Data> {
 }
 //
 /// V: Debug implies Data::ElementCopy: Debug, but we can't prove it to rustc yet
-impl<V: VectorInfo + Debug, Data: VectorizedImpl<V>> Debug for Vectors<V, Data>
+impl<V: VectorInfo + Debug, Data: VectorizedDataImpl<V>> Debug for Vectors<V, Data>
 where
     Data::ElementCopy: Debug,
 {
@@ -461,7 +461,7 @@ where
 }
 //
 /// Applies if the two vectors emit elements of type V or tuples of the same arity
-impl<V: VectorInfo + PartialEq, Data1: VectorizedImpl<V>, Data2: VectorizedImpl<V>>
+impl<V: VectorInfo + PartialEq, Data1: VectorizedDataImpl<V>, Data2: VectorizedDataImpl<V>>
     PartialEq<Vectors<V, Data2>> for Vectors<V, Data1>
 where
     Data1::ElementCopy: PartialEq<Data2::ElementCopy>,
@@ -472,7 +472,7 @@ where
 }
 //
 /// Applies if this was built from a single slice/container, not a tuple of data
-impl<V: VectorInfo + PartialEq, Data: VectorizedImpl<V>> PartialEq<[V]> for Vectors<V, Data>
+impl<V: VectorInfo + PartialEq, Data: VectorizedDataImpl<V>> PartialEq<[V]> for Vectors<V, Data>
 where
     Data::ElementCopy: Borrow<V>,
 {
@@ -487,16 +487,16 @@ where
 }
 
 /// Read-only slice of [`Vectors`]
-pub type Slice<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::CopySlice<'a>>;
+pub type Slice<'a, V, Data> = Vectors<V, <Data as VectorizedData<V>>::CopySlice<'a>>;
 
 /// Slice of [`Vectors`] allowing in-place mutation
-pub type RefSlice<'a, V, Data> = Vectors<V, <Data as Vectorized<V>>::RefSlice<'a>>;
+pub type RefSlice<'a, V, Data> = Vectors<V, <Data as VectorizedData<V>>::RefSlice<'a>>;
 
 /// Aligned SIMD data
-pub type AlignedVectors<V, Data> = Vectors<V, <Data as VectorizedImpl<V>>::Aligned>;
+pub type AlignedVectors<V, Data> = Vectors<V, <Data as VectorizedDataImpl<V>>::Aligned>;
 
 /// Unaligned SIMD data
-pub type UnalignedVectors<V, Data> = Vectors<V, <Data as VectorizedImpl<V>>::Unaligned>;
+pub type UnalignedVectors<V, Data> = Vectors<V, <Data as VectorizedDataImpl<V>>::Unaligned>;
 
 /// Padded scalar data treated as SIMD data
 pub type PaddedVectors<V, Data> = Vectors<V, Data>;

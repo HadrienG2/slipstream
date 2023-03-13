@@ -7,8 +7,8 @@
 //! and achieve better runtime performance.
 
 use super::{
-    data::{AlignedData, AlignedDataMut, PaddedData, PaddedDataMut, VectorizedImpl},
-    AlignedVectors, PaddedVectors, UnalignedVectors, VectorInfo, Vectorized, Vectors,
+    data::{AlignedData, AlignedDataMut, PaddedData, PaddedDataMut, VectorizedDataImpl},
+    AlignedVectors, PaddedVectors, UnalignedVectors, VectorInfo, VectorizedData, Vectors,
 };
 use crate::{inner::Repr, vector::align::Align, Vector};
 
@@ -62,12 +62,12 @@ use crate::{inner::Repr, vector::align::Align, Vector};
 pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     /// Vectorized representation of this data
     ///
-    /// You can use the [`Vectorized`] trait to query at compile time which type
-    /// of Vectors collections you are going to get and what kind of
+    /// You can use the [`VectorizedData`] trait to query at compile time which
+    /// type of Vectors collections you are going to get and what kind of
     /// elements iterators and getters of this collection will emit.
     ///
-    /// `VectorizedImpl` is an implementation detail of this crate.
-    type Vectorized: Vectorized<V> + VectorizedImpl<V>;
+    /// `VectorizedDataImpl` is an implementation detail of this crate.
+    type VectorizedData: VectorizedData<V> + VectorizedDataImpl<V>;
 
     // Required methods
 
@@ -78,7 +78,7 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     // The returned building blocks are...
     //
     // - A pointer-like entity for treating the data as a slice of Vector
-    //   (see [`VectorizedImpl`] for more information)
+    //   (see [`VectorizedDataImpl`] for more information)
     // - The number of Vector elements that the emulated slice contains
     //
     // # Errors
@@ -92,7 +92,7 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     fn into_vectorized_parts(
         self,
         padding: Option<V::Scalar>,
-    ) -> Result<(Self::Vectorized, usize), VectorizeError>;
+    ) -> Result<(Self::VectorizedData, usize), VectorizeError>;
 
     // Provided methods
 
@@ -108,7 +108,7 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     ///   amount of SIMD elements.
     ///
     /// [`vectorize_pad()`]: Vectorizable::vectorize_pad()
-    fn vectorize(self) -> UnalignedVectors<V, Self::Vectorized> {
+    fn vectorize(self) -> UnalignedVectors<V, Self::VectorizedData> {
         let (base, len) = self.into_vectorized_parts(None).unwrap();
         unsafe { Vectors::from_raw_parts(base.into_unaligned_unchecked(), len) }
     }
@@ -131,7 +131,7 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     ///
     /// - If called on a tuple and not all tuple elements yield the same
     ///   amount of SIMD elements.
-    fn vectorize_pad(self, padding: V::Scalar) -> PaddedVectors<V, Self::Vectorized> {
+    fn vectorize_pad(self, padding: V::Scalar) -> PaddedVectors<V, Self::VectorizedData> {
         let (base, len) = self.into_vectorized_parts(Some(padding)).unwrap();
         unsafe { Vectors::from_raw_parts(base, len) }
     }
@@ -174,7 +174,7 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     /// - If the data is not in a SIMD-optimized layout.
     /// - If called on a tuple and not all tuple elements yield the same
     ///   amount of SIMD elements.
-    fn vectorize_aligned(self) -> AlignedVectors<V, Self::Vectorized> {
+    fn vectorize_aligned(self) -> AlignedVectors<V, Self::VectorizedData> {
         let (base, len) = self.into_vectorized_parts(None).unwrap();
         unsafe { Vectors::from_raw_parts(base.into_aligned_unchecked(), len) }
     }
@@ -196,12 +196,12 @@ pub enum VectorizeError {
 unsafe impl<'target, A: Align, B: Repr, const S: usize> Vectorizable<Vector<A, B, S>>
     for &'target [Vector<A, B, S>]
 {
-    type Vectorized = AlignedData<'target, Vector<A, B, S>>;
+    type VectorizedData = AlignedData<'target, Vector<A, B, S>>;
 
     fn into_vectorized_parts(
         self,
         _padding: Option<B>,
-    ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+    ) -> Result<(Self::VectorizedData, usize), VectorizeError> {
         Ok((self.into(), self.len()))
     }
 }
@@ -209,12 +209,12 @@ unsafe impl<'target, A: Align, B: Repr, const S: usize> Vectorizable<Vector<A, B
 unsafe impl<'target, A: Align, B: Repr, const S: usize> Vectorizable<Vector<A, B, S>>
     for &'target mut [Vector<A, B, S>]
 {
-    type Vectorized = AlignedDataMut<'target, Vector<A, B, S>>;
+    type VectorizedData = AlignedDataMut<'target, Vector<A, B, S>>;
 
     fn into_vectorized_parts(
         self,
         _padding: Option<B>,
-    ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+    ) -> Result<(Self::VectorizedData, usize), VectorizeError> {
         let len = self.len();
         Ok((self.into(), len))
     }
@@ -223,12 +223,12 @@ unsafe impl<'target, A: Align, B: Repr, const S: usize> Vectorizable<Vector<A, B
 unsafe impl<A: Align, B: Repr, const S: usize, const ARRAY_SIZE: usize>
     Vectorizable<Vector<A, B, S>> for [Vector<A, B, S>; ARRAY_SIZE]
 {
-    type Vectorized = [Vector<A, B, S>; ARRAY_SIZE];
+    type VectorizedData = [Vector<A, B, S>; ARRAY_SIZE];
 
     fn into_vectorized_parts(
         self,
         _padding: Option<B>,
-    ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+    ) -> Result<(Self::VectorizedData, usize), VectorizeError> {
         Ok((self, ARRAY_SIZE))
     }
 }
@@ -236,12 +236,12 @@ unsafe impl<A: Align, B: Repr, const S: usize, const ARRAY_SIZE: usize>
 unsafe impl<'target, A: Align, B: Repr, const S: usize, const ARRAY_SIZE: usize>
     Vectorizable<Vector<A, B, S>> for &'target [Vector<A, B, S>; ARRAY_SIZE]
 {
-    type Vectorized = AlignedData<'target, Vector<A, B, S>>;
+    type VectorizedData = AlignedData<'target, Vector<A, B, S>>;
 
     fn into_vectorized_parts(
         self,
         padding: Option<B>,
-    ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+    ) -> Result<(Self::VectorizedData, usize), VectorizeError> {
         self.as_slice().into_vectorized_parts(padding)
     }
 }
@@ -249,12 +249,12 @@ unsafe impl<'target, A: Align, B: Repr, const S: usize, const ARRAY_SIZE: usize>
 unsafe impl<'target, A: Align, B: Repr, const S: usize, const ARRAY_SIZE: usize>
     Vectorizable<Vector<A, B, S>> for &'target mut [Vector<A, B, S>; ARRAY_SIZE]
 {
-    type Vectorized = AlignedDataMut<'target, Vector<A, B, S>>;
+    type VectorizedData = AlignedDataMut<'target, Vector<A, B, S>>;
 
     fn into_vectorized_parts(
         self,
         padding: Option<B>,
-    ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+    ) -> Result<(Self::VectorizedData, usize), VectorizeError> {
         self.as_mut_slice().into_vectorized_parts(padding)
     }
 }
@@ -264,12 +264,12 @@ unsafe impl<'target, A: Align, B: Repr, const S: usize, const ARRAY_SIZE: usize>
 unsafe impl<'target, A: Align, B: Repr, const S: usize> Vectorizable<Vector<A, B, S>>
     for &'target [B]
 {
-    type Vectorized = PaddedData<'target, Vector<A, B, S>>;
+    type VectorizedData = PaddedData<'target, Vector<A, B, S>>;
 
     fn into_vectorized_parts(
         self,
         padding: Option<B>,
-    ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+    ) -> Result<(Self::VectorizedData, usize), VectorizeError> {
         Ok((
             PaddedData::new(self, padding)?.0,
             self.len() / S + (self.len() % S != 0) as usize,
@@ -280,12 +280,12 @@ unsafe impl<'target, A: Align, B: Repr, const S: usize> Vectorizable<Vector<A, B
 unsafe impl<'target, A: Align, B: Repr, const S: usize> Vectorizable<Vector<A, B, S>>
     for &'target mut [B]
 {
-    type Vectorized = PaddedDataMut<'target, Vector<A, B, S>>;
+    type VectorizedData = PaddedDataMut<'target, Vector<A, B, S>>;
 
     fn into_vectorized_parts(
         self,
         padding: Option<B>,
-    ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+    ) -> Result<(Self::VectorizedData, usize), VectorizeError> {
         let simd_len = self.len() / S + (self.len() % S != 0) as usize;
         Ok((PaddedDataMut::new(self, padding)?, simd_len))
     }
@@ -297,12 +297,12 @@ unsafe impl<'target, A: Align, B: Repr, const S: usize> Vectorizable<Vector<A, B
 unsafe impl<'target, A: Align, B: Repr, const S: usize, const ARRAY_SIZE: usize>
     Vectorizable<Vector<A, B, S>> for &'target [B; ARRAY_SIZE]
 {
-    type Vectorized = PaddedData<'target, Vector<A, B, S>>;
+    type VectorizedData = PaddedData<'target, Vector<A, B, S>>;
 
     fn into_vectorized_parts(
         self,
         padding: Option<B>,
-    ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+    ) -> Result<(Self::VectorizedData, usize), VectorizeError> {
         self.as_slice().into_vectorized_parts(padding)
     }
 }
@@ -310,12 +310,12 @@ unsafe impl<'target, A: Align, B: Repr, const S: usize, const ARRAY_SIZE: usize>
 unsafe impl<'target, A: Align, B: Repr, const S: usize, const ARRAY_SIZE: usize>
     Vectorizable<Vector<A, B, S>> for &'target mut [B; ARRAY_SIZE]
 {
-    type Vectorized = PaddedDataMut<'target, Vector<A, B, S>>;
+    type VectorizedData = PaddedDataMut<'target, Vector<A, B, S>>;
 
     fn into_vectorized_parts(
         self,
         padding: Option<B>,
-    ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+    ) -> Result<(Self::VectorizedData, usize), VectorizeError> {
         self.as_mut_slice().into_vectorized_parts(padding)
     }
 }
@@ -328,12 +328,12 @@ macro_rules! impl_vectorizable_for_tuple {
     ) => {
         #[allow(non_snake_case)]
         unsafe impl<V: VectorInfo $(, $t: Vectorizable<V>)*> Vectorizable<V> for ($($t,)*) {
-            type Vectorized = ($($t::Vectorized,)*);
+            type VectorizedData = ($($t::VectorizedData,)*);
 
             fn into_vectorized_parts(
                 self,
                 padding: Option<V::Scalar>,
-            ) -> Result<(Self::Vectorized, usize), VectorizeError> {
+            ) -> Result<(Self::VectorizedData, usize), VectorizeError> {
                 // Pattern-match the tuple to variables named after inner types
                 let ($($t,)*) = self;
 

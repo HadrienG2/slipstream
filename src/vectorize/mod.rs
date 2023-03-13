@@ -57,7 +57,7 @@ use core::mem::MaybeUninit;
 
 // === PUBLIC RE-EXPORTS FROM INNER MODULES ===
 
-pub use data::{PaddedMut, UnalignedMut, Vectorized};
+pub use data::{PaddedMut, UnalignedMut, VectorizedData};
 pub use vectorizable::{Vectorizable, VectorizeError};
 pub use vectors::{
     AlignedVectors, Chunks, ChunksExact, GenericChunks, GenericChunksExact, IntoIter, Iter,

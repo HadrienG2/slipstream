@@ -1,9 +1,9 @@
 //! Indexing of `Vectors`
 
 #[cfg(doc)]
-use crate::vectorize::Vectorized;
+use crate::vectorize::VectorizedData;
 use crate::vectorize::{
-    data::{VectorizedImpl, VectorizedSliceImpl},
+    data::{VectorizedDataImpl, VectorizedSliceImpl},
     RefSlice, Slice, VectorInfo, Vectors,
 };
 use core::ops::{Bound, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive};
@@ -16,7 +16,7 @@ use core::ops::{Bound, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, Ran
 /// # Safety
 ///
 /// Unsafe code can rely on this trait being implemented correctly
-pub unsafe trait VectorIndex<V: VectorInfo, Data: VectorizedImpl<V>> {
+pub unsafe trait VectorIndex<V: VectorInfo, Data: VectorizedDataImpl<V>> {
     /// Truth that `self` is a valid index for `vectors`
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool;
 
@@ -25,7 +25,7 @@ pub unsafe trait VectorIndex<V: VectorInfo, Data: VectorizedImpl<V>> {
     /// [`Data::ElementCopy`] if this is a single index, [`Slice`] if this is a
     /// range of target indices.
     ///
-    /// [`Data::ElementCopy`]: Vectorized::ElementCopy
+    /// [`Data::ElementCopy`]: VectorizedData::ElementCopy
     type Output<'out>
     where
         Self: 'out,
@@ -43,7 +43,7 @@ pub unsafe trait VectorIndex<V: VectorInfo, Data: VectorizedImpl<V>> {
     /// [`Data::ElementRef`] if this is a single index, [`RefSlice`] if this is
     /// a range of target indices.
     ///
-    /// [`Data::ElementRef`]: Vectorized::ElementRef
+    /// [`Data::ElementRef`]: VectorizedData::ElementRef
     type RefOutput<'out>
     where
         Self: 'out,
@@ -57,7 +57,7 @@ pub unsafe trait VectorIndex<V: VectorInfo, Data: VectorizedImpl<V>> {
     unsafe fn get_unchecked_ref(self, vectors: &mut Vectors<V, Data>) -> Self::RefOutput<'_>;
 }
 
-unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for usize {
+unsafe impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorIndex<V, Data> for usize {
     #[inline(always)]
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
         *self < vectors.len()
@@ -82,7 +82,7 @@ unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for usi
     }
 }
 
-unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeFull {
+unsafe impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorIndex<V, Data> for RangeFull {
     #[inline]
     fn is_valid_index(&self, _vectors: &Vectors<V, Data>) -> bool {
         true
@@ -111,7 +111,7 @@ unsafe fn get_range_from_unchecked<V: VectorInfo, Data: VectorizedSliceImpl<V>>(
     unsafe { slice.split_at_unchecked(start) }.1
 }
 
-unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeFrom<usize> {
+unsafe impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorIndex<V, Data> for RangeFrom<usize> {
     #[inline]
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
         self.start < vectors.len()
@@ -140,7 +140,7 @@ unsafe fn get_range_to_unchecked<V: VectorInfo, Data: VectorizedSliceImpl<V>>(
     unsafe { slice.split_at_unchecked(end) }.0
 }
 
-unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeTo<usize> {
+unsafe impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorIndex<V, Data> for RangeTo<usize> {
     #[inline]
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
         self.end <= vectors.len()
@@ -174,7 +174,7 @@ unsafe fn get_range_unchecked<V: VectorInfo, Data: VectorizedSliceImpl<V>>(
     }
 }
 
-unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for Range<usize> {
+unsafe impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorIndex<V, Data> for Range<usize> {
     #[inline]
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
         if self.start < self.end {
@@ -212,7 +212,9 @@ unsafe fn get_range_inclusive_unchecked<V: VectorInfo, Data: VectorizedSliceImpl
     }
 }
 
-unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for RangeInclusive<usize> {
+unsafe impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorIndex<V, Data>
+    for RangeInclusive<usize>
+{
     #[inline]
     fn is_valid_index(&self, vectors: &Vectors<V, Data>) -> bool {
         let (&start, &end) = (self.start(), self.end());
@@ -238,7 +240,7 @@ unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data> for Ran
     }
 }
 
-unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data>
+unsafe impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorIndex<V, Data>
     for RangeToInclusive<usize>
 {
     #[inline]
@@ -288,7 +290,7 @@ unsafe fn get_bounds_unchecked<V: VectorInfo, Data: VectorizedSliceImpl<V>>(
     get_bounds_unchecked(slice, Bound::Included(lower_included), upper)
 }
 
-unsafe impl<V: VectorInfo, Data: VectorizedImpl<V>> VectorIndex<V, Data>
+unsafe impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorIndex<V, Data>
     for (Bound<usize>, Bound<usize>)
 {
     #[inline]

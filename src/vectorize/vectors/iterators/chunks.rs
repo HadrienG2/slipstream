@@ -1,6 +1,6 @@
 //! Iterator over chunks of `Vectors`' inner data
 
-use crate::vectorize::{data::VectorizedSliceImpl, VectorInfo, Vectorized, Vectors};
+use crate::vectorize::{data::VectorizedSliceImpl, VectorInfo, VectorizedData, Vectors};
 use core::{iter::FusedIterator, num::NonZeroUsize};
 
 // === VARIABLE-SIZE CHUNKS ===
@@ -161,7 +161,8 @@ unsafe impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> iterator_ilp::Trus
 /// slice of the iteration will be the remainder.
 ///
 /// This struct is created by [`Vectors::chunks()`].
-pub type Chunks<'vectors, V, Data> = GenericChunks<V, <Data as Vectorized<V>>::CopySlice<'vectors>>;
+pub type Chunks<'vectors, V, Data> =
+    GenericChunks<V, <Data as VectorizedData<V>>::CopySlice<'vectors>>;
 
 /// An iterator over [`Vectors`] in (non-overlapping) chunks (`chunk_size`
 /// elements at a time), starting at the beginning of the dataset and providing
@@ -172,7 +173,7 @@ pub type Chunks<'vectors, V, Data> = GenericChunks<V, <Data as Vectorized<V>>::C
 ///
 /// This struct is created by [`Vectors::chunks_ref()`].
 pub type RefChunks<'vectors, V, Data> =
-    GenericChunks<V, <Data as Vectorized<V>>::RefSlice<'vectors>>;
+    GenericChunks<V, <Data as VectorizedData<V>>::RefSlice<'vectors>>;
 
 // === EXACT-SIZE CHUNKS ===
 
@@ -308,7 +309,7 @@ unsafe impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> iterator_ilp::Trus
 ///
 /// This struct is created by [`Vectors::chunks_exact()`].
 pub type ChunksExact<'vectors, V, Data> =
-    GenericChunksExact<V, <Data as Vectorized<V>>::CopySlice<'vectors>>;
+    GenericChunksExact<V, <Data as VectorizedData<V>>::CopySlice<'vectors>>;
 
 /// An iterator over [`Vectors`] in (non-overlapping) chunks (`chunk_size`
 /// elements at a time), starting at the beginning of the dataset and providing
@@ -320,7 +321,7 @@ pub type ChunksExact<'vectors, V, Data> =
 ///
 /// This struct is created by [`Vectors::chunks_exact_ref()`].
 pub type RefChunksExact<'vectors, V, Data> =
-    GenericChunksExact<V, <Data as Vectorized<V>>::RefSlice<'vectors>>;
+    GenericChunksExact<V, <Data as VectorizedData<V>>::RefSlice<'vectors>>;
 
 // TODO: Windows
 
