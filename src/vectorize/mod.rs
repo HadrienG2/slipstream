@@ -70,9 +70,13 @@ pub use vectors::{
 /// Build an array using a mapping from index to value
 ///
 /// This may look suspiciously like `core::array::from_fn()`, because it is
-/// actually a clone of that function. Unfortunately, at the time of
-/// writing, the real thing does not optimize well because the compiler fails to
-/// inline some steps, so we need to clone it for performance...
+/// actually a clone of that function. Unfortunately, as of rustc 1.67, the real
+/// thing does not optimize well because the compiler fails to inline some
+/// steps, so we need to clone it for performance...
+///
+/// A fix has landed in nightly, and is scheduled to be featured in rustc 1.69.
+/// So this code can eventually go away, once that release is old news...
+/// https://github.com/rust-lang/rust/issues/108765
 #[inline(always)]
 fn array_from_fn<const SIZE: usize, T>(mut idx_to_elem: impl FnMut(usize) -> T) -> [T; SIZE] {
     /// Partially initialized array
