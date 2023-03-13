@@ -1,7 +1,7 @@
 //! SIMD data collection
 //!
 //! This module builds upon the `VectorizedData` abstraction to provide the
-//! `Vectors` type, a `[Vector]`-like view of a heterogeneous data set
+//! `Vectorized` type, a `[Vector]`-like view of a heterogeneous data set
 //! composed of slices and containers of `Vector`s and scalar elements.
 //!
 //! It defines most of the public API of the reinterpreted vector data.
@@ -37,13 +37,13 @@ pub use iterators::{
 /// with iteration and indexing operations yielding the type that is
 /// described in the documentation of [`Vectorizable`].
 #[derive(Copy, Clone)]
-pub struct Vectors<V: VectorInfo, Data: VectorizedDataImpl<V>> {
+pub struct Vectorized<V: VectorInfo, Data: VectorizedDataImpl<V>> {
     data: Data,
     len: usize,
     vectors: PhantomData<V>,
 }
 //
-impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectors<V, Data> {
+impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectorized<V, Data> {
     /// Create a SIMD data container
     ///
     /// # Safety
@@ -144,7 +144,7 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectors<V, Data> {
         self.len - 1
     }
 
-    /// Like [`get()`](Vectors::get_ref()), but panics if index is out of range
+    /// Like [`get()`](Vectorized::get_ref()), but panics if index is out of range
     ///
     /// # Panics
     ///
@@ -160,7 +160,7 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectors<V, Data> {
         self.get(index).expect("Index is out of range")
     }
 
-    /// Like [`get_ref()`](Vectors::get_ref()), but panics if index is out of range
+    /// Like [`get_ref()`](Vectorized::get_ref()), but panics if index is out of range
     ///
     /// # Panics
     ///
@@ -273,8 +273,8 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectors<V, Data> {
     ///
     /// Panics if `chunk_size` is 0.
     ///
-    /// [`chunks_exact()`]: Vectors::chunks_exact()
-    /// [`rchunks()`]: Vectors::rchunks()
+    /// [`chunks_exact()`]: Vectorized::chunks_exact()
+    /// [`rchunks()`]: Vectorized::rchunks()
     #[inline]
     pub fn chunks(&self, chunk_size: usize) -> Chunks<V, Data> {
         let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
@@ -296,8 +296,8 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectors<V, Data> {
     ///
     /// Panics if `chunk_size` is 0.
     ///
-    /// [`chunks_exact_ref()`]: Vectors::chunks_exact_ref()
-    /// [`rchunks_ref()`]: Vectors::rchunks_ref()
+    /// [`chunks_exact_ref()`]: Vectorized::chunks_exact_ref()
+    /// [`rchunks_ref()`]: Vectorized::rchunks_ref()
     #[inline]
     pub fn chunks_ref(&mut self, chunk_size: usize) -> RefChunks<V, Data> {
         let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
@@ -324,8 +324,8 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectors<V, Data> {
     ///
     /// Panics if `chunk_size` is 0.
     ///
-    /// [`chunks()`]: Vectors::chunks()
-    /// [`rchunks()`]: Vectors::rchunks()
+    /// [`chunks()`]: Vectorized::chunks()
+    /// [`rchunks()`]: Vectorized::rchunks()
     #[inline]
     pub fn chunks_exact(&self, chunk_size: usize) -> ChunksExact<V, Data> {
         let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
@@ -353,8 +353,8 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectors<V, Data> {
     ///
     /// Panics if `chunk_size` is 0.
     ///
-    /// [`chunks_ref()`]: Vectors::chunks_ref()
-    /// [`rchunks_ref()`]: Vectors::rchunks_ref()
+    /// [`chunks_ref()`]: Vectorized::chunks_ref()
+    /// [`rchunks_ref()`]: Vectorized::rchunks_ref()
     #[inline]
     pub fn chunks_exact_ref(&mut self, chunk_size: usize) -> RefChunksExact<V, Data> {
         let chunk_size = NonZeroUsize::new(chunk_size).expect("Chunks must have nonzero size");
@@ -368,7 +368,7 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectors<V, Data> {
     /// Equivalent to `self.index(..)`
     #[inline]
     pub fn as_slice(&self) -> Slice<V, Data> {
-        unsafe { Vectors::from_raw_parts(self.data.as_slice(), self.len) }
+        unsafe { Vectorized::from_raw_parts(self.data.as_slice(), self.len) }
     }
 
     /// Extract a slice covering the entire dataset, allowing in-place access
@@ -376,7 +376,7 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectors<V, Data> {
     /// Equivalent to `self.index_ref(..)`
     #[inline]
     pub fn as_ref_slice(&mut self) -> RefSlice<V, Data> {
-        unsafe { Vectors::from_raw_parts(self.data.as_ref_slice(), self.len) }
+        unsafe { Vectorized::from_raw_parts(self.data.as_ref_slice(), self.len) }
     }
 
     // TODO: Figure out inlining discipline for the following
@@ -386,7 +386,7 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectors<V, Data> {
     //       partition_point
     // TODO: is_ascii, eq_ignore_ascii_case, escape_ascii
     // TODO: Methods that require dataset mutability and could only be
-    //       implemented for Vectors with an underlying mutable dataset (which
+    //       implemented for Vectorized with an underlying mutable dataset (which
     //       can be done via a requirement on ElementRef):
     //       copy_from_slice, copy_within, make_ascii_(lower|upper)case, fill,
     //       fill_with, reverse, rotate_left, rotate_right, sort(_unstable)?_by((_cached)?_key)?,
@@ -395,9 +395,9 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectors<V, Data> {
 //
 /// # Slice-specific methods
 ///
-/// These operations are currently only available on slices of [`Vectors`]. You
-/// can extract a slice covering all data within a [`Vectors`] container using
-/// [`Vectors::as_slice()`] or [`Vectors::as_ref_slice()`].
+/// These operations are currently only available on slices of [`Vectorized`]. You
+/// can extract a slice covering all data within a [`Vectorized`] container using
+/// [`Vectorized::as_slice()`] or [`Vectorized::as_ref_slice()`].
 //
 // --- Internal docs start here ---
 //
@@ -412,11 +412,11 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectors<V, Data> {
 //
 // And since owned data cannot be split in general (think arrays), this means
 // that splitting must be specific to slices.
-impl<V: VectorInfo, Data: VectorizedSliceImpl<V>> Vectors<V, Data> {
+impl<V: VectorInfo, Data: VectorizedSliceImpl<V>> Vectorized<V, Data> {
     /// Construct an empty slice
     #[inline]
     pub fn empty() -> Self {
-        unsafe { Vectors::from_raw_parts(Data::empty(), 0) }
+        unsafe { Vectorized::from_raw_parts(Data::empty(), 0) }
     }
 
     /// Divides a slice into two at an index
@@ -434,7 +434,7 @@ impl<V: VectorInfo, Data: VectorizedSliceImpl<V>> Vectors<V, Data> {
         unsafe { self.split_at_unchecked(mid) }
     }
 
-    /// Like [`split_at()`](Vectors::split_at()), but without bounds checking
+    /// Like [`split_at()`](Vectorized::split_at()), but without bounds checking
     ///
     /// # Safety
     ///
@@ -445,13 +445,13 @@ impl<V: VectorInfo, Data: VectorizedSliceImpl<V>> Vectors<V, Data> {
     pub unsafe fn split_at_unchecked(self, mid: usize) -> (Self, Self) {
         let total_len = self.len();
         let (left_data, right_data) = unsafe { self.data.split_at_unchecked(mid, total_len) };
-        let wrap = |data, len| unsafe { Vectors::from_raw_parts(data, len) };
+        let wrap = |data, len| unsafe { Vectorized::from_raw_parts(data, len) };
         (wrap(left_data, mid), wrap(right_data, total_len - mid))
     }
 }
 //
 /// V: Debug implies Data::ElementCopy: Debug, but we can't prove it to rustc yet
-impl<V: VectorInfo + Debug, Data: VectorizedDataImpl<V>> Debug for Vectors<V, Data>
+impl<V: VectorInfo + Debug, Data: VectorizedDataImpl<V>> Debug for Vectorized<V, Data>
 where
     Data::ElementCopy: Debug,
 {
@@ -462,17 +462,17 @@ where
 //
 /// Applies if the two vectors emit elements of type V or tuples of the same arity
 impl<V: VectorInfo + PartialEq, Data1: VectorizedDataImpl<V>, Data2: VectorizedDataImpl<V>>
-    PartialEq<Vectors<V, Data2>> for Vectors<V, Data1>
+    PartialEq<Vectorized<V, Data2>> for Vectorized<V, Data1>
 where
     Data1::ElementCopy: PartialEq<Data2::ElementCopy>,
 {
-    fn eq(&self, other: &Vectors<V, Data2>) -> bool {
+    fn eq(&self, other: &Vectorized<V, Data2>) -> bool {
         self.len() == other.len() && self.iter().zip(other.iter()).all(|(a, b)| a == b)
     }
 }
 //
 /// Applies if this was built from a single slice/container, not a tuple of data
-impl<V: VectorInfo + PartialEq, Data: VectorizedDataImpl<V>> PartialEq<[V]> for Vectors<V, Data>
+impl<V: VectorInfo + PartialEq, Data: VectorizedDataImpl<V>> PartialEq<[V]> for Vectorized<V, Data>
 where
     Data::ElementCopy: Borrow<V>,
 {
@@ -486,19 +486,19 @@ where
     }
 }
 
-/// Read-only slice of [`Vectors`]
-pub type Slice<'a, V, Data> = Vectors<V, <Data as VectorizedData<V>>::CopySlice<'a>>;
+/// Read-only slice of [`Vectorized`]
+pub type Slice<'a, V, Data> = Vectorized<V, <Data as VectorizedData<V>>::CopySlice<'a>>;
 
-/// Slice of [`Vectors`] allowing in-place mutation
-pub type RefSlice<'a, V, Data> = Vectors<V, <Data as VectorizedData<V>>::RefSlice<'a>>;
+/// Slice of [`Vectorized`] allowing in-place mutation
+pub type RefSlice<'a, V, Data> = Vectorized<V, <Data as VectorizedData<V>>::RefSlice<'a>>;
 
 /// Aligned SIMD data
-pub type AlignedVectors<V, Data> = Vectors<V, <Data as VectorizedDataImpl<V>>::Aligned>;
+pub type VectorizedAligned<V, Data> = Vectorized<V, <Data as VectorizedDataImpl<V>>::Aligned>;
 
 /// Unaligned SIMD data
-pub type UnalignedVectors<V, Data> = Vectors<V, <Data as VectorizedDataImpl<V>>::Unaligned>;
+pub type VectorizedUnaligned<V, Data> = Vectorized<V, <Data as VectorizedDataImpl<V>>::Unaligned>;
 
 /// Padded scalar data treated as SIMD data
-pub type PaddedVectors<V, Data> = Vectors<V, Data>;
+pub type VectorizedPadded<V, Data> = Vectorized<V, Data>;
 
 // FIXME: Tests

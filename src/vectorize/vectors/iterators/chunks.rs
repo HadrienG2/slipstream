@@ -1,6 +1,6 @@
-//! Iterator over chunks of `Vectors`' inner data
+//! Iterator over chunks of `Vectorized` data
 
-use crate::vectorize::{data::VectorizedSliceImpl, VectorInfo, VectorizedData, Vectors};
+use crate::vectorize::{data::VectorizedSliceImpl, VectorInfo, Vectorized, VectorizedData};
 use core::{iter::FusedIterator, num::NonZeroUsize};
 
 // === VARIABLE-SIZE CHUNKS ===
@@ -8,7 +8,7 @@ use core::{iter::FusedIterator, num::NonZeroUsize};
 /// Common generic implementation behind Chunks and RefChunks
 pub struct GenericChunks<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> {
     /// Remainder of the initial slice of output, or None if iteration is over
-    remainder: Option<Vectors<V, SliceData>>,
+    remainder: Option<Vectorized<V, SliceData>>,
 
     /// Size of the chunks that we're splitting
     chunk_size: NonZeroUsize,
@@ -17,7 +17,7 @@ pub struct GenericChunks<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> {
 impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> GenericChunks<V, SliceData> {
     /// Set up a chunks iterator
     #[inline]
-    pub(crate) fn new(slice: Vectors<V, SliceData>, chunk_size: NonZeroUsize) -> Self {
+    pub(crate) fn new(slice: Vectorized<V, SliceData>, chunk_size: NonZeroUsize) -> Self {
         Self {
             remainder: Some(slice),
             chunk_size,
@@ -32,7 +32,7 @@ impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> GenericChunks<V, SliceDat
 }
 //
 impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> Iterator for GenericChunks<V, SliceData> {
-    type Item = Vectors<V, SliceData>;
+    type Item = Vectorized<V, SliceData>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -154,24 +154,24 @@ unsafe impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> iterator_ilp::Trus
 {
 }
 
-/// An iterator over [`Vectors`] in (non-overlapping) chunks (`chunk_size`
+/// An iterator over [`Vectorized`] in (non-overlapping) chunks (`chunk_size`
 /// elements at a time), starting at the beginning of the dataset
 ///
 /// When the dataset length is not evenly divided by the chunk size, the last
 /// slice of the iteration will be the remainder.
 ///
-/// This struct is created by [`Vectors::chunks()`].
+/// This struct is created by [`Vectorized::chunks()`].
 pub type Chunks<'vectors, V, Data> =
     GenericChunks<V, <Data as VectorizedData<V>>::CopySlice<'vectors>>;
 
-/// An iterator over [`Vectors`] in (non-overlapping) chunks (`chunk_size`
+/// An iterator over [`Vectorized`] in (non-overlapping) chunks (`chunk_size`
 /// elements at a time), starting at the beginning of the dataset and providing
 /// mutable access to mutable elements of the dataset.
 ///
 /// When the dataset length is not evenly divided by the chunk size, the last
 /// slice of the iteration will be the remainder.
 ///
-/// This struct is created by [`Vectors::chunks_ref()`].
+/// This struct is created by [`Vectorized::chunks_ref()`].
 pub type RefChunks<'vectors, V, Data> =
     GenericChunks<V, <Data as VectorizedData<V>>::RefSlice<'vectors>>;
 
@@ -182,19 +182,19 @@ pub type RefChunks<'vectors, V, Data> =
 /// Common generic implementation behind ChunksExact and RefChunksExact
 pub struct GenericChunksExact<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> {
     regular: GenericChunks<V, SliceData>,
-    remainder: Vectors<V, SliceData>,
+    remainder: Vectorized<V, SliceData>,
 }
 //
 impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> GenericChunksExact<V, SliceData> {
     /// Set up an exact-size chunks iterator
     #[inline]
-    pub(crate) fn new(vectors: Vectors<V, SliceData>, chunk_size: NonZeroUsize) -> Self {
+    pub(crate) fn new(vectors: Vectorized<V, SliceData>, chunk_size: NonZeroUsize) -> Self {
         let total_len = vectors.len();
         let remainder_len = total_len % chunk_size;
         let (regular_vectors, remainder) = if remainder_len > 0 {
             unsafe { vectors.split_at_unchecked(total_len - remainder_len) }
         } else {
-            (vectors, Vectors::empty())
+            (vectors, Vectorized::empty())
         };
         Self {
             regular: GenericChunks::new(regular_vectors, chunk_size),
@@ -206,14 +206,14 @@ impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> GenericChunksExact<V, Sli
     /// going to be returned by the iterator. The returned slice has at most
     /// `chunk_size-1` elements.
     #[inline]
-    pub fn remainder(&self) -> &Vectors<V, SliceData> {
+    pub fn remainder(&self) -> &Vectorized<V, SliceData> {
         &self.remainder
     }
 
     /// Reemainder of the original dataset that is not going to be returned by
     /// the iterator. The returned slice has at most `chunk_size-1` elements.
     #[inline]
-    pub fn into_remainder(self) -> Vectors<V, SliceData> {
+    pub fn into_remainder(self) -> Vectorized<V, SliceData> {
         self.remainder
     }
 
@@ -221,8 +221,8 @@ impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> GenericChunksExact<V, Sli
     #[inline(always)]
     unsafe fn assume_regular(
         &self,
-        item: Option<Vectors<V, SliceData>>,
-    ) -> Option<Vectors<V, SliceData>> {
+        item: Option<Vectorized<V, SliceData>>,
+    ) -> Option<Vectorized<V, SliceData>> {
         Some(unsafe { item?.split_at_unchecked(self.regular.chunk_size()).0 })
     }
 }
@@ -230,7 +230,7 @@ impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> GenericChunksExact<V, Sli
 impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> Iterator
     for GenericChunksExact<V, SliceData>
 {
-    type Item = Vectors<V, SliceData>;
+    type Item = Vectorized<V, SliceData>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -300,18 +300,18 @@ unsafe impl<V: VectorInfo, SliceData: VectorizedSliceImpl<V>> iterator_ilp::Trus
 {
 }
 
-/// An iterator over [`Vectors`] in (non-overlapping) chunks (`chunk_size`
+/// An iterator over [`Vectorized`] in (non-overlapping) chunks (`chunk_size`
 /// elements at a time), starting at the beginning of the dataset
 ///
 /// When the slice len is not evenly divided by the chunk size, the last up to
 /// `chunk_size-1` elements will be omitted but can be retrieved from the
 /// `remainder()` function from the iterator.
 ///
-/// This struct is created by [`Vectors::chunks_exact()`].
+/// This struct is created by [`Vectorized::chunks_exact()`].
 pub type ChunksExact<'vectors, V, Data> =
     GenericChunksExact<V, <Data as VectorizedData<V>>::CopySlice<'vectors>>;
 
-/// An iterator over [`Vectors`] in (non-overlapping) chunks (`chunk_size`
+/// An iterator over [`Vectorized`] in (non-overlapping) chunks (`chunk_size`
 /// elements at a time), starting at the beginning of the dataset and providing
 /// mutable access to mutable elements of the dataset.
 ///
@@ -319,7 +319,7 @@ pub type ChunksExact<'vectors, V, Data> =
 /// `chunk_size-1` elements will be omitted but can be retrieved from the
 /// `into_remainder()` function from the iterator.
 ///
-/// This struct is created by [`Vectors::chunks_exact_ref()`].
+/// This struct is created by [`Vectorized::chunks_exact_ref()`].
 pub type RefChunksExact<'vectors, V, Data> =
     GenericChunksExact<V, <Data as VectorizedData<V>>::RefSlice<'vectors>>;
 

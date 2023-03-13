@@ -1,4 +1,4 @@
-//! Iteration over `Vectors`
+//! Iteration over `Vectorized`
 
 mod chunks;
 mod values;

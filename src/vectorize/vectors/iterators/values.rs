@@ -1,11 +1,11 @@
-//! Iteration over values within `Vectors`
+//! Iteration over values within `Vectorized`
 
-use crate::vectorize::{data::VectorizedDataImpl, RefSlice, Slice, VectorInfo, Vectors};
+use crate::vectorize::{data::VectorizedDataImpl, RefSlice, Slice, VectorInfo, Vectorized};
 use core::iter::FusedIterator;
 
-/// Genericity over Vectors, &Vectors and &mut Vectors
+/// Genericity over Vectorized, &Vectorized and &mut Vectorized
 #[doc(hidden)]
-pub trait VectorsLike {
+pub trait VectorizedLike {
     fn len(&self) -> usize;
 
     type Item;
@@ -16,13 +16,14 @@ pub trait VectorsLike {
     ///
     /// - This should only be called once per index, i.e. you must ensure
     ///   that the iterator will not visit this index again
-    /// - This should only be called for valid indices of the underlying Vectors
+    /// - This should only be called for valid indices of the underlying `Vectorized`
+    ///   slice
     unsafe fn extract_item(&mut self, idx: usize) -> Self::Item;
 }
 //
-impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorsLike for Vectors<V, Data> {
+impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorizedLike for Vectorized<V, Data> {
     fn len(&self) -> usize {
-        Vectors::len(self)
+        Vectorized::len(self)
     }
 
     type Item = Data::Element;
@@ -36,11 +37,11 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorsLike for Vectors<V, Data
     }
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> VectorsLike
-    for &'vectors Vectors<V, Data>
+impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> VectorizedLike
+    for &'vectors Vectorized<V, Data>
 {
     fn len(&self) -> usize {
-        Vectors::len(self)
+        Vectorized::len(self)
     }
 
     type Item = Data::ElementCopy;
@@ -51,11 +52,11 @@ impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> VectorsLike
     }
 }
 //
-impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> VectorsLike
-    for &'vectors mut Vectors<V, Data>
+impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> VectorizedLike
+    for &'vectors mut Vectorized<V, Data>
 {
     fn len(&self) -> usize {
-        Vectors::len(self)
+        Vectorized::len(self)
     }
 
     type Item = Data::ElementRef<'vectors>;
@@ -72,14 +73,14 @@ impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> VectorsLike
     }
 }
 
-/// Iterator over owned, copied or borrowed [`Vectors`] elements
-pub struct GenericIter<Vecs: VectorsLike> {
+/// Iterator over owned, copied or borrowed [`Vectorized`] elements
+pub struct GenericIter<Vecs: VectorizedLike> {
     vectors: Vecs,
     start: usize,
     end: usize,
 }
 //
-impl<Vecs: VectorsLike> GenericIter<Vecs> {
+impl<Vecs: VectorizedLike> GenericIter<Vecs> {
     /// Start iteration
     fn new(vectors: Vecs) -> Self {
         let end = vectors.len();
@@ -91,7 +92,7 @@ impl<Vecs: VectorsLike> GenericIter<Vecs> {
     }
 }
 //
-impl<Vecs: VectorsLike> Iterator for GenericIter<Vecs> {
+impl<Vecs: VectorizedLike> Iterator for GenericIter<Vecs> {
     type Item = Vecs::Item;
 
     #[inline(always)]
@@ -131,7 +132,7 @@ impl<Vecs: VectorsLike> Iterator for GenericIter<Vecs> {
     }
 }
 //
-impl<Vecs: VectorsLike> DoubleEndedIterator for GenericIter<Vecs> {
+impl<Vecs: VectorizedLike> DoubleEndedIterator for GenericIter<Vecs> {
     #[inline(always)]
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.start < self.end {
@@ -154,20 +155,20 @@ impl<Vecs: VectorsLike> DoubleEndedIterator for GenericIter<Vecs> {
     }
 }
 //
-impl<Vecs: VectorsLike> ExactSizeIterator for GenericIter<Vecs> {
+impl<Vecs: VectorizedLike> ExactSizeIterator for GenericIter<Vecs> {
     #[inline]
     fn len(&self) -> usize {
         self.end - self.start
     }
 }
 //
-impl<Vecs: VectorsLike> FusedIterator for GenericIter<Vecs> {}
+impl<Vecs: VectorizedLike> FusedIterator for GenericIter<Vecs> {}
 //
 #[cfg(feature = "iterator_ilp")]
-unsafe impl<Vecs: VectorsLike> iterator_ilp::TrustedLowerBound for GenericIter<Vecs> {}
+unsafe impl<Vecs: VectorizedLike> iterator_ilp::TrustedLowerBound for GenericIter<Vecs> {}
 
-/// Read-only [`Vectors`] iterator
-pub type Iter<'vectors, V, Data> = GenericIter<&'vectors Vectors<V, Data>>;
+/// Read-only [`Vectorized`] iterator
+pub type Iter<'vectors, V, Data> = GenericIter<&'vectors Vectorized<V, Data>>;
 //
 impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> Iter<'vectors, V, Data> {
     /// Views the underlying data as a subslice of the original data.
@@ -181,7 +182,7 @@ impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> Iter<'vectors, V, Dat
 }
 //
 impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> IntoIterator
-    for &'vectors Vectors<V, Data>
+    for &'vectors Vectorized<V, Data>
 {
     type Item = Data::ElementCopy;
     type IntoIter = Iter<'vectors, V, Data>;
@@ -192,8 +193,8 @@ impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> IntoIterator
     }
 }
 
-/// In-place [`Vectors`] iterator
-pub type RefIter<'vectors, V, Data> = GenericIter<&'vectors mut Vectors<V, Data>>;
+/// In-place [`Vectorized`] iterator
+pub type RefIter<'vectors, V, Data> = GenericIter<&'vectors mut Vectorized<V, Data>>;
 //
 impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> RefIter<'vectors, V, Data> {
     /// Views the underlying data as a subslice of the original
@@ -217,7 +218,7 @@ impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> RefIter<'vectors, V, 
 }
 //
 impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> IntoIterator
-    for &'vectors mut Vectors<V, Data>
+    for &'vectors mut Vectorized<V, Data>
 {
     type Item = Data::ElementRef<'vectors>;
     type IntoIter = RefIter<'vectors, V, Data>;
@@ -228,8 +229,8 @@ impl<'vectors, V: VectorInfo, Data: VectorizedDataImpl<V>> IntoIterator
     }
 }
 
-/// Consuming [`Vectors`] iterator
-pub type IntoIter<V, Data> = GenericIter<Vectors<V, Data>>;
+/// Consuming [`Vectorized`] iterator
+pub type IntoIter<V, Data> = GenericIter<Vectorized<V, Data>>;
 //
 impl<V: VectorInfo, Data: VectorizedDataImpl<V>> IntoIter<V, Data> {
     /// Remaining items of this iterator, as a read-only slice
@@ -245,7 +246,7 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> IntoIter<V, Data> {
     }
 }
 //
-impl<V: VectorInfo, Data: VectorizedDataImpl<V>> IntoIterator for Vectors<V, Data> {
+impl<V: VectorInfo, Data: VectorizedDataImpl<V>> IntoIterator for Vectorized<V, Data> {
     type Item = Data::Element;
     type IntoIter = IntoIter<V, Data>;
 

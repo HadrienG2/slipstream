@@ -13,7 +13,7 @@ mod mutation;
 use super::{VectorInfo, VectorizeError};
 #[cfg(doc)]
 use crate::{
-    vectorize::{Vectorizable, Vectors},
+    vectorize::{Vectorizable, Vectorized},
     Vector,
 };
 use core::{
@@ -27,15 +27,15 @@ use core::{
 
 pub use mutation::{PaddedMut, UnalignedMut};
 
-/// Outcome of reinterpreting [`Vectorizable`] data reinterpreted as [`Vectors`]
+/// Outcome of reinterpreting [`Vectorizable`] data as [`Vectorized`]
 ///
-/// This trait tells you what types you can expect out of the [`Vectors`]
+/// This trait tells you what types you can expect out of the [`Vectorized`]
 /// collection that is emitted by the [`Vectorizable`] trait.
 ///
 /// To recapitulate the basic rules concerning [`Element`](Self::Element) are:
 ///
-/// - For all supported types T, a [`Vectors`] collection built out of `&[T]` or
-///   a collection of T has iterators and getters that emit owned [`Vector`]
+/// - For all supported types T, a [`Vectorized`] collection built out of `&[T]`
+///   or a collection of T has iterators and getters that emit owned [`Vector`]
 ///   values.
 /// - If built out of `&mut [Vector]`, or out of `&mut [Scalar]` with an
 ///   assertion that the data has optimal SIMD layout
@@ -45,7 +45,7 @@ pub use mutation::{PaddedMut, UnalignedMut};
 /// - If build out of a tuple of the above, it emits tuples of the above
 ///   element types.
 ///
-/// All [`Vectors`] getters that take `&self` emit owned [`Vector`] values or
+/// All [`Vectorized`] getters that take `&self` emit owned [`Vector`] values or
 /// tuples thereof, called [`ElementCopy`](Self::ElementCopy), while those that
 /// take `&mut self` emit shorter-lived versions of the `Element` type described
 /// above, called [`ElementRef`](Self::ElementRef).
@@ -57,14 +57,14 @@ pub use mutation::{PaddedMut, UnalignedMut};
 /// implementation detail of this crate, therefore this trait should not
 /// be implemented outside of this crate.
 pub unsafe trait VectorizedData<V: VectorInfo>: Sized {
-    /// Owned element of the output [`Vectors`] collection
+    /// Owned element of the output [`Vectorized`] collection
     ///
     /// Yielded by the `IntoIterator` impl that consumes the collection.
     type Element: Sized;
 
-    /// Borrowed element of the output [`Vectors`] collection
+    /// Borrowed element of the output [`Vectorized`] collection
     ///
-    /// Returned by methods that take `&mut Vectors` and yield individual
+    /// Returned by methods that take `&mut Vectorized` and yield individual
     /// [`Vector`] or `&mut Vector` elements.
     ///
     /// Will always be [`Self::Element`] with a reduced lifetime, but this
@@ -73,7 +73,7 @@ pub unsafe trait VectorizedData<V: VectorInfo>: Sized {
     where
         Self: 'result;
 
-    /// Copy of an element of the output [`Vectors`] collection
+    /// Copy of an element of the output [`Vectorized`] collection
     ///
     /// Will either be a single [`Vector`] value (for slice-like data) or a
     /// tuple of [`Vector`] values whose length match that of the `Element` tuple.
@@ -81,7 +81,7 @@ pub unsafe trait VectorizedData<V: VectorInfo>: Sized {
 
     /// Mutably borrowed slice of this dataset
     ///
-    /// Returned by methods that borrow a subset of `&mut Vectors`.
+    /// Returned by methods that borrow a subset of `&mut Vectorized`.
     type RefSlice<'result>: VectorizedData<V, Element = Self::ElementRef<'result>, ElementCopy = Self::ElementCopy>
         + VectorizedSliceImpl<V>
         + Debug
@@ -90,7 +90,7 @@ pub unsafe trait VectorizedData<V: VectorInfo>: Sized {
 
     /// Read-only slice of this dataset
     ///
-    /// Returned by methods that borrow a subset of `&Vectors`.
+    /// Returned by methods that borrow a subset of `&Vectorized`.
     type CopySlice<'result>: VectorizedData<V, Element = Self::ElementCopy, ElementCopy = Self::ElementCopy>
         + VectorizedSliceImpl<V>
         + Copy
@@ -107,7 +107,7 @@ pub unsafe trait VectorizedData<V: VectorInfo>: Sized {
 /// equal length that is made to behave like a slice of tuples.
 ///
 /// The length of the underlying slice is not known by this type, it is
-/// stored as part of the higher-level `Vectors` collection that this type
+/// stored as part of the higher-level `Vectorized` collection that this type
 /// is used to implement.
 ///
 /// Instead, implementors of this type behave like the pointer that
@@ -215,7 +215,7 @@ pub unsafe trait VectorizedSliceImpl<V: VectorInfo>:
     /// - Calling this method with an out-of-bounds index is undefined
     ///   behavior even if the resulting reference is not used. The caller
     ///   has to ensure that mid <= len.
-    /// - `len` must be the length of the underlying `Vectors` slice.
+    /// - `len` must be the length of the underlying `Vectorized` slice.
     //
     // NOTE: Not being able to say that the output has lower lifetime than
     //       Self will cause lifetime issues, but being able to say that a
@@ -359,7 +359,7 @@ unsafe impl<'target, V: VectorInfo> VectorizedSliceImpl<V> for AlignedData<'targ
     }
 }
 
-// Owned arrays of Vector must be stored as-is in the Vectors collection,
+// Owned arrays of Vector must be stored as-is in the Vectorized collection,
 // but otherwise behave like &[Vector]
 unsafe impl<V: VectorInfo, const SIZE: usize> VectorizedData<V> for [V; SIZE] {
     type Element = V;

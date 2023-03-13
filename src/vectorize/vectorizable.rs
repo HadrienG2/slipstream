@@ -1,14 +1,15 @@
-//! Conversion from vectorizable data to `Vectors`
+//! Conversion from vectorizable data to `Vectorized`
 //!
 //! Using the `Vectorizable` trait provided by this module, users can turn
-//! collections of SIMD vectors and scalar data into a `Vectors` view. If the
+//! collections of SIMD vectors and scalar data into a `Vectorized` view. If the
 //! scalar data exhibits some good properties from a SIMD perspective, they can
 //! be asserted as part of the conversion process, in order to reduce code bloat
 //! and achieve better runtime performance.
 
 use super::{
     data::{AlignedData, AlignedDataMut, PaddedData, PaddedDataMut, VectorizedDataImpl},
-    AlignedVectors, PaddedVectors, UnalignedVectors, VectorInfo, VectorizedData, Vectors,
+    VectorInfo, Vectorized, VectorizedAligned, VectorizedData, VectorizedPadded,
+    VectorizedUnaligned,
 };
 use crate::{inner::Repr, vector::align::Align, Vector};
 
@@ -17,8 +18,8 @@ use crate::{inner::Repr, vector::align::Align, Vector};
 /// Implemented for slices and containers of vectors and scalars,
 /// as well as for tuples of these entities.
 ///
-/// Provides you with ways to create the [`Vectors`] collection, which
-/// behaves conceptually like a slice of [`Vector`] or tuples thereof, with
+/// Provides you with ways to create the [`Vectorized`] collection, which
+/// behaves conceptually like a slice of [`Vector`]s or tuples thereof, with
 /// iteration and indexing operations yielding the following types:
 ///
 /// - If built out of a read-only slice or owned container of vectors or
@@ -31,7 +32,7 @@ use crate::{inner::Repr, vector::align::Align, Vector};
 /// - If built out of a tuple of the above entities, it yields tuples of the
 ///   aforementioned elements.
 ///
-/// There are three ways to create [`Vectors`] using this trait depending on
+/// There are three ways to create [`Vectorized`] using this trait depending on
 /// what kind of data you're starting from:
 ///
 /// - If starting out of arbitrary data, you can use the [`vectorize_pad()`]
@@ -63,7 +64,7 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     /// Vectorized representation of this data
     ///
     /// You can use the [`VectorizedData`] trait to query at compile time which
-    /// type of Vectors collections you are going to get and what kind of
+    /// type of Vectorized collections you are going to get and what kind of
     /// elements iterators and getters of this collection will emit.
     ///
     /// `VectorizedDataImpl` is an implementation detail of this crate.
@@ -108,9 +109,9 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     ///   amount of SIMD elements.
     ///
     /// [`vectorize_pad()`]: Vectorizable::vectorize_pad()
-    fn vectorize(self) -> UnalignedVectors<V, Self::VectorizedData> {
+    fn vectorize(self) -> VectorizedUnaligned<V, Self::VectorizedData> {
         let (base, len) = self.into_vectorized_parts(None).unwrap();
-        unsafe { Vectors::from_raw_parts(base.into_unaligned_unchecked(), len) }
+        unsafe { Vectorized::from_raw_parts(base.into_unaligned_unchecked(), len) }
     }
 
     /// Create a SIMD view of this data, providing some padding
@@ -118,7 +119,7 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     /// Vector slices do not need padding and will ignore it.
     ///
     /// For scalar slices whose size is not a multiple of the number of SIMD
-    /// vector lanes, padding will be inserted where incomplete Vectors
+    /// vector lanes, padding will be inserted where incomplete `Vector`s
     /// would be produced, to fill in the missing vector lanes. One would
     /// normally set the padding to the neutral element of the computation
     /// being performed so that its presence doesn't affect results.
@@ -131,9 +132,9 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     ///
     /// - If called on a tuple and not all tuple elements yield the same
     ///   amount of SIMD elements.
-    fn vectorize_pad(self, padding: V::Scalar) -> PaddedVectors<V, Self::VectorizedData> {
+    fn vectorize_pad(self, padding: V::Scalar) -> VectorizedPadded<V, Self::VectorizedData> {
         let (base, len) = self.into_vectorized_parts(Some(padding)).unwrap();
-        unsafe { Vectors::from_raw_parts(base, len) }
+        unsafe { Vectorized::from_raw_parts(base, len) }
     }
 
     /// Create a SIMD view of this data, assert it has a memory layout optimized
@@ -174,9 +175,9 @@ pub unsafe trait Vectorizable<V: VectorInfo>: Sized {
     /// - If the data is not in a SIMD-optimized layout.
     /// - If called on a tuple and not all tuple elements yield the same
     ///   amount of SIMD elements.
-    fn vectorize_aligned(self) -> AlignedVectors<V, Self::VectorizedData> {
+    fn vectorize_aligned(self) -> VectorizedAligned<V, Self::VectorizedData> {
         let (base, len) = self.into_vectorized_parts(None).unwrap();
-        unsafe { Vectors::from_raw_parts(base.into_aligned_unchecked(), len) }
+        unsafe { Vectorized::from_raw_parts(base.into_aligned_unchecked(), len) }
     }
 }
 
@@ -191,7 +192,7 @@ pub enum VectorizeError {
     InhomogeneousLength,
 }
 
-// === Vectorize implementation is trivial for slices of vector data ===
+// === Vectorizable implementation is trivial for slices of vector data ===
 
 unsafe impl<'target, A: Align, B: Repr, const S: usize> Vectorizable<Vector<A, B, S>>
     for &'target [Vector<A, B, S>]
@@ -356,7 +357,7 @@ macro_rules! impl_vectorizable_for_tuple {
                     }
                 )*
 
-                // All good, return Vectors building blocks
+                // All good, return Vectorized building blocks
                 Ok((
                     ($($t.0,)*),
                     len.expect("This should not be implemented for zero-sized tuples"),
