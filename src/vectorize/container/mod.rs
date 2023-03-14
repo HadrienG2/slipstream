@@ -509,6 +509,7 @@ pub(crate) mod tests {
     use proptest::prelude::*;
 
     // TODO: pub(crate) slice index generators
+    // TODO: Add tuple data generator to data/mod.rs and use it for tuple tests
 
     proptest! {
         /// Test properties of a freshly created Vectorized container
@@ -534,15 +535,12 @@ pub(crate) mod tests {
                 assert_eq!(!vectorized.is_empty(), len != 0);
                 assert_eq!(vectorized.first(), first);
                 assert_eq!(vectorized.last(), last);
-                assert_eq!(vectorized.iter().next(), first);
-                assert_eq!(vectorized.iter().next_back(), last);
             }
             check_basics(&mut vectorized, len, first, last);
             check_basics(&mut vectorized.as_slice(), len, first, last);
             check_basics(&mut vectorized.as_ref_slice(), len, first, last);
             assert_eq!(vectorized, vectorized.as_slice());
             assert_eq!(vectorized == Vectorized::<V, TupleData>::empty(), is_empty);
-
 
             // Handle empty input special case
             if len == 0 {
@@ -551,7 +549,6 @@ pub(crate) mod tests {
                 ) {
                     assert!(vectorized.first_ref().is_none());
                     assert!(vectorized.last_ref().is_none());
-                    assert!(vectorized.iter_ref().next().is_none());
                     assert!(vectorized.split_first().is_none());
                     assert!(vectorized.split_first_ref().is_none());
                     assert!(vectorized.split_last().is_none());
@@ -560,8 +557,6 @@ pub(crate) mod tests {
                 check_empty(&mut vectorized);
                 check_empty(&mut vectorized.as_slice());
                 check_empty(&mut vectorized.as_ref_slice());
-                assert_eq!(vectorized, vectorized.as_slice());
-                assert_eq!(vectorized, Vectorized::<V, TupleData>::empty());
                 return Ok(());
             }
 
@@ -576,8 +571,6 @@ pub(crate) mod tests {
                     let mut vectorized = $vectorized;
                     assert_eq!(vectorized.first_ref().map(read_tuple), Some(first));
                     assert_eq!(vectorized.last_ref().map(read_tuple), Some(last));
-                    assert_eq!(vectorized.iter_ref().next().map(read_tuple), Some(first));
-                    assert_eq!(vectorized.iter_ref().next_back().map(read_tuple), Some(last));
                 } }
             }
             check_non_empty_ref!(&mut vectorized);
@@ -586,11 +579,7 @@ pub(crate) mod tests {
                 let mut vectorized_slice = vectorized.as_slice();
                 assert_eq!(vectorized_slice.first_ref(), Some(first));
                 assert_eq!(vectorized_slice.last_ref(), Some(last));
-                assert_eq!(vectorized_slice.iter_ref().next(), Some(first));
-                assert_eq!(vectorized_slice.iter_ref().next_back(), Some(last));
             }
-            assert_eq!(vectorized, vectorized.as_slice());
-            assert_ne!(vectorized, Vectorized::<V, TupleData>::empty());
 
             // Splitting is destructive, so we can only easily test it on slices
             // TODO: Deduplicate between these, then run them on as_ref_slice() too, then handle split_(first|last)_ref separately
@@ -613,6 +602,7 @@ pub(crate) mod tests {
         }
 
         // TODO: Test setting data via _ref accessors
-        // TODO: Test single index and slice index, with valid and invalid indices, chunks(_exact)?(_ref)?, split_at(_unchecked)?
+        // TODO: Test split_at(_unchecked)?
+        // TODO: Leave testing of indexing, iterators and chunks to the dedicated modules
     }
 }
