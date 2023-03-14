@@ -1227,6 +1227,9 @@ pub(crate) mod tests {
 
     /// Maximum length (in SIMD vector elements) that we need to test in order
     /// to be sure to observe all interesting effects
+    ///
+    /// Should be >= 3 to test that loops stay correct beyond the first
+    /// repetition, add 1 due to truncation of trailing scalars in UnalignedData
     const MAX_SIMD_LEN: usize = 4;
 
     /// Generate the building blocks to initialize AlignedData(Mut)?
