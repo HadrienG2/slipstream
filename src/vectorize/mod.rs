@@ -22,9 +22,9 @@
 //! # double(&[], &mut [])
 //! ```
 
+mod container;
 mod data;
 mod vectorizable;
-mod vectors;
 
 use crate::{inner::Repr, vector::align::Align, Vector};
 use core::mem::MaybeUninit;
@@ -57,13 +57,13 @@ use core::mem::MaybeUninit;
 
 // === PUBLIC RE-EXPORTS FROM INNER MODULES ===
 
-pub use data::{PaddedMut, UnalignedMut, VectorizedData};
-pub use vectorizable::{Vectorizable, VectorizeError};
-pub use vectors::{
+pub use container::{
     Chunks, ChunksExact, GenericChunks, GenericChunksExact, IntoIter, Iter, RefChunks,
     RefChunksExact, RefIter, RefSlice, Slice, VectorIndex, Vectorized, VectorizedAligned,
     VectorizedPadded, VectorizedUnaligned,
 };
+pub use data::{PaddedMut, UnalignedMut, VectorizedData};
+pub use vectorizable::{Vectorizable, VectorizeError};
 
 // === COMMON UTILITIES THAT PROBABLY BELONG ELSEWHERE ===
 
