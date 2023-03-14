@@ -79,7 +79,7 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectorized<V, Data> {
     /// Returns the first element, a mutable reference to it if the underlying
     /// dataset is mutable, or None if the container is empty
     #[inline]
-    pub fn first_ref(&mut self) -> Option<Data::ElementRef<'_>> {
+    pub fn first_ref<'a>(&'a mut self) -> Option<Data::ElementRef<'a>> {
         self.get_ref(0)
     }
 
@@ -107,8 +107,7 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectorized<V, Data> {
     /// or None if it is empty.
     #[inline(always)]
     pub fn split_last(&self) -> Option<(Data::ElementCopy, Slice<V, Data>)> {
-        (!self.is_empty()).then(move || {
-            let last = self.last_idx();
+        self.last_idx().map(move |last| {
             let (head, tail) = unsafe { self.as_slice().split_at_unchecked(last) };
             (tail.into_iter().next().unwrap(), head)
         })
@@ -118,8 +117,7 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectorized<V, Data> {
     /// or None if it is empty, allowing in-place access.
     #[inline(always)]
     pub fn split_last_ref(&mut self) -> Option<(Data::ElementRef<'_>, RefSlice<V, Data>)> {
-        (!self.is_empty()).then(move || {
-            let last = self.last_idx();
+        self.last_idx().map(move |last| {
             let (head, tail) = unsafe { self.as_ref_slice().split_at_unchecked(last) };
             (tail.into_iter().next().unwrap(), head)
         })
@@ -128,20 +126,20 @@ impl<V: VectorInfo, Data: VectorizedDataImpl<V>> Vectorized<V, Data> {
     /// Returns the last element, or None if the container is empty
     #[inline]
     pub fn last(&self) -> Option<Data::ElementCopy> {
-        self.get(self.last_idx())
+        self.last_idx().and_then(move |last| self.get(last))
     }
 
     /// Returns the last element, a mutable reference to it if the underlying
     /// dataset is mutable, or None if the container is empty
     #[inline]
     pub fn last_ref(&mut self) -> Option<Data::ElementRef<'_>> {
-        self.get_ref(self.last_idx())
+        self.last_idx().and_then(move |last| self.get_ref(last))
     }
 
     /// Index of the last element
     #[inline(always)]
-    fn last_idx(&self) -> usize {
-        self.len - 1
+    fn last_idx(&self) -> Option<usize> {
+        self.len.checked_sub(1)
     }
 
     /// Like [`get()`](Vectorized::get_ref()), but panics if index is out of range
@@ -501,4 +499,120 @@ pub type VectorizedUnaligned<V, Data> = Vectorized<V, <Data as VectorizedDataImp
 /// Padded scalar data treated as SIMD data
 pub type VectorizedPadded<V, Data> = Vectorized<V, Data>;
 
-// FIXME: Tests
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::vectorize::{
+        data::tests::{read_tuple, tuple_init_input, SimdData, TupleData},
+        tests::V,
+    };
+    use proptest::prelude::*;
+
+    // TODO: pub(crate) slice index generators
+
+    proptest! {
+        /// Test properties of a freshly created Vectorized container
+        #[test]
+        fn init(mut init in tuple_init_input(true)) {
+            let len = init.simd_len();
+            let is_empty = len == 0;
+            let first = (!is_empty).then(|| init.simd_element(0));
+            let last = (!is_empty).then(|| init.simd_element(len - 1));
+
+            let data = init.as_tuple_data();
+            let mut vectorized = unsafe { Vectorized::from_raw_parts(data, len) };
+
+            fn check_basics<V: VectorInfo, Data: VectorizedDataImpl<V>>(
+                vectorized: &mut Vectorized<V, Data>,
+                len: usize,
+                first: Option<Data::ElementCopy>,
+                last: Option<Data::ElementCopy>,
+            )
+                where Data::ElementCopy: Debug + PartialEq,
+            {
+                assert_eq!(vectorized.len(), len);
+                assert_eq!(!vectorized.is_empty(), len != 0);
+                assert_eq!(vectorized.first(), first);
+                assert_eq!(vectorized.last(), last);
+                assert_eq!(vectorized.iter().next(), first);
+                assert_eq!(vectorized.iter().next_back(), last);
+            }
+            check_basics(&mut vectorized, len, first, last);
+            check_basics(&mut vectorized.as_slice(), len, first, last);
+            check_basics(&mut vectorized.as_ref_slice(), len, first, last);
+            assert_eq!(vectorized, vectorized.as_slice());
+            assert_eq!(vectorized == Vectorized::<V, TupleData>::empty(), is_empty);
+
+
+            // Handle empty input special case
+            if len == 0 {
+                fn check_empty<V: VectorInfo, Data: VectorizedDataImpl<V>>(
+                    vectorized: &mut Vectorized<V, Data>,
+                ) {
+                    assert!(vectorized.first_ref().is_none());
+                    assert!(vectorized.last_ref().is_none());
+                    assert!(vectorized.iter_ref().next().is_none());
+                    assert!(vectorized.split_first().is_none());
+                    assert!(vectorized.split_first_ref().is_none());
+                    assert!(vectorized.split_last().is_none());
+                    assert!(vectorized.split_last_ref().is_none());
+                }
+                check_empty(&mut vectorized);
+                check_empty(&mut vectorized.as_slice());
+                check_empty(&mut vectorized.as_ref_slice());
+                assert_eq!(vectorized, vectorized.as_slice());
+                assert_eq!(vectorized, Vectorized::<V, TupleData>::empty());
+                return Ok(());
+            }
+
+            // Handle non-empty inputs, starting with basic sanity checks which,
+            // due to current annoying borrow checker limitations that lead to
+            // an assumption of 'static lifetime on GATs, must be partially
+            // macro'ed instead of fully implemented as functions.
+            let first = first.unwrap();
+            let last = last.unwrap();
+            macro_rules! check_non_empty_ref {
+                ($vectorized:expr) => { #[allow(unused_mut)] {
+                    let mut vectorized = $vectorized;
+                    assert_eq!(vectorized.first_ref().map(read_tuple), Some(first));
+                    assert_eq!(vectorized.last_ref().map(read_tuple), Some(last));
+                    assert_eq!(vectorized.iter_ref().next().map(read_tuple), Some(first));
+                    assert_eq!(vectorized.iter_ref().next_back().map(read_tuple), Some(last));
+                } }
+            }
+            check_non_empty_ref!(&mut vectorized);
+            check_non_empty_ref!(vectorized.as_ref_slice());
+            {
+                let mut vectorized_slice = vectorized.as_slice();
+                assert_eq!(vectorized_slice.first_ref(), Some(first));
+                assert_eq!(vectorized_slice.last_ref(), Some(last));
+                assert_eq!(vectorized_slice.iter_ref().next(), Some(first));
+                assert_eq!(vectorized_slice.iter_ref().next_back(), Some(last));
+            }
+            assert_eq!(vectorized, vectorized.as_slice());
+            assert_ne!(vectorized, Vectorized::<V, TupleData>::empty());
+
+            // Splitting is destructive, so we can only easily test it on slices
+            // TODO: Deduplicate between these, then run them on as_ref_slice() too, then handle split_(first|last)_ref separately
+            {
+                let slice = vectorized.as_slice();
+                let (first_elem, rest) = slice.split_first().unwrap();
+                assert_eq!(first_elem, first);
+                assert_eq!(rest.len(), len - 1);
+                let expected_last = (rest.len() > 0).then_some(last);
+                assert_eq!(rest.last(), expected_last);
+            }
+            {
+                let slice = vectorized.as_slice();
+                let (last_elem, rest) = slice.split_last().unwrap();
+                assert_eq!(last_elem, last);
+                assert_eq!(rest.len(), len - 1);
+                let expected_first = (rest.len() > 0).then_some(first);
+                assert_eq!(rest.first(), expected_first);
+            }
+        }
+
+        // TODO: Test setting data via _ref accessors
+        // TODO: Test single index and slice index, with valid and invalid indices, chunks(_exact)?(_ref)?, split_at(_unchecked)?
+    }
+}

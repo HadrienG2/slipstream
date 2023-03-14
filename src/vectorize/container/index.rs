@@ -67,7 +67,11 @@ unsafe impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorIndex<V, Data> for
 
     #[inline(always)]
     unsafe fn get_unchecked(self, vectors: &Vectorized<V, Data>) -> Self::Output<'_> {
-        unsafe { vectors.data.get_unchecked(self, self == vectors.last_idx()) }
+        unsafe {
+            vectors
+                .data
+                .get_unchecked(self, self == vectors.last_idx().unwrap())
+        }
     }
 
     type RefOutput<'out> = Data::ElementRef<'out> where Self: 'out, Data: 'out;
@@ -77,7 +81,7 @@ unsafe impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorIndex<V, Data> for
         unsafe {
             vectors
                 .data
-                .get_unchecked_ref(self, self == vectors.last_idx())
+                .get_unchecked_ref(self, self == vectors.last_idx().unwrap())
         }
     }
 }

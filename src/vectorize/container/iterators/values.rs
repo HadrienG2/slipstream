@@ -97,7 +97,7 @@ impl<Vecs: VectorizedLike> Iterator for GenericIter<Vecs> {
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.start < self.end {
+        if self.start != self.end {
             self.start += 1;
             Some(unsafe { self.vectors.extract_item(self.start - 1) })
         } else {
@@ -135,9 +135,9 @@ impl<Vecs: VectorizedLike> Iterator for GenericIter<Vecs> {
 impl<Vecs: VectorizedLike> DoubleEndedIterator for GenericIter<Vecs> {
     #[inline(always)]
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.start < self.end {
+        if self.start != self.end {
             self.end -= 1;
-            Some(unsafe { self.vectors.extract_item(self.end + 1) })
+            Some(unsafe { self.vectors.extract_item(self.end) })
         } else {
             None
         }

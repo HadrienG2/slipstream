@@ -1529,6 +1529,26 @@ pub(crate) mod tests {
         (Just(data), 0..=simd_len)
     }
 
+    /// Read all the values from the output of get_unchecked_ref on TupleData
+    pub(crate) type TupleRef<'a> = (V, &'a mut V, V, UnalignedMut<'a, V>, V, PaddedMut<'a, V>);
+    //
+    pub(crate) fn read_tuple(tuple: TupleRef) -> (V, V, V, V, V, V) {
+        read_from_tuple(&tuple)
+    }
+    //
+    pub(crate) fn read_from_tuple(
+        (aligned, aligned_mut, unaligned, unaligned_mut, padded, padded_mut): &TupleRef,
+    ) -> (V, V, V, V, V, V) {
+        (
+            *aligned,
+            **aligned_mut,
+            *unaligned,
+            **unaligned_mut,
+            *padded,
+            **padded_mut,
+        )
+    }
+
     // === TESTS FOR THIS MODULE ===
 
     /// Hash a value
@@ -2007,16 +2027,9 @@ pub(crate) mod tests {
             {
                 let mut tuple = data.as_tuple_data();
                 assert_eq!(unsafe { tuple.get_unchecked(idx, is_last) }, elem);
-                let (
-                    aligned_val,
-                    aligned_mut,
-                    unaligned_val,
-                    mut unaligned_mut,
-                    padded_val,
-                    mut padded_mut
-                ) = unsafe { tuple.get_unchecked_ref(idx, is_last) };
-                let readout = (aligned_val, *aligned_mut, unaligned_val, *unaligned_mut, padded_val, *padded_mut);
-                assert_eq!(readout, elem);
+                let output = unsafe { tuple.get_unchecked_ref(idx, is_last) };
+                assert_eq!(read_from_tuple(&output), elem);
+                let (_, aligned_mut, _, mut unaligned_mut, _, mut padded_mut) = output;
                 *aligned_mut = !elem.1;
                 *unaligned_mut = !elem.3;
                 *padded_mut = !elem.5;
