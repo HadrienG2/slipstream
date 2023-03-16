@@ -503,7 +503,7 @@ pub type VectorizedPadded<V, Data> = Vectorized<V, Data>;
 pub(crate) mod tests {
     use super::*;
     use crate::vectorize::{
-        data::tests::{read_tuple, tuple_init_input, SimdData, TupleData},
+        data::tests::{read_tuple, tuple_init_input, SimdData, TupleData, TupleInitInput},
         tests::V,
     };
     use proptest::prelude::*;
@@ -522,8 +522,12 @@ pub(crate) mod tests {
                 let first = (!is_empty).then(|| data.simd_element(0));
                 let last = (!is_empty).then(|| data.simd_element(len - 1));
 
-                let data = data.as_tuple_data();
-                let mut vectorized = unsafe { Vectorized::from_raw_parts(data, len) };
+                fn make_vectorized(data: &mut TupleInitInput) -> Vectorized<V, TupleData> {
+                    let len = data.simd_len();
+                    let data = data.as_tuple_data();
+                    unsafe { Vectorized::from_raw_parts(data, len) }
+                }
+                let mut vectorized = make_vectorized(&mut data);
 
                 fn check_basics<V: VectorInfo, Data: VectorizedDataImpl<V>>(
                     vectorized: &mut Vectorized<V, Data>,
@@ -583,30 +587,97 @@ pub(crate) mod tests {
                     assert_eq!(vectorized_slice.last_ref(), Some(last));
                 }
 
-                // Splitting is destructive, so we can only easily test it on slices
-                // TODO: Deduplicate between these, then run them on as_ref_slice() too, then handle split_(first|last)_ref separately
-                {
-                    let slice = vectorized.as_slice();
-                    let (first_elem, rest) = slice.split_first().unwrap();
-                    assert_eq!(first_elem, first);
+                // Splitting is destructive, so we must recreate the container
+                // or slice being split after every test.
+                type TupleElem = <TupleInitInput as SimdData>::Element;
+                fn test_split<
+                    'vec,
+                    'data: 'vec,
+                    BorrowedElem,
+                    SourceData: VectorizedDataImpl<V> + 'data,
+                    RestData: VectorizedSliceImpl<V> + 'data,
+                >(
+                    vectorized: &'vec mut Vectorized<V, SourceData>,
+                    split: impl FnOnce(&'vec mut Vectorized<V, SourceData>) -> Option<(BorrowedElem, Vectorized<V, RestData>)>,
+                    expected_elem: TupleElem,
+                    check_elem: impl FnOnce(BorrowedElem) -> TupleElem,
+                    expected_other_side: TupleElem,
+                    check_other_side: impl FnOnce(&Vectorized<V, RestData>) -> Option<TupleElem>,
+                ) {
+                    let len = vectorized.len();
+                    let (elem, rest) = split(vectorized).unwrap();
+                    assert_eq!(check_elem(elem), expected_elem);
                     assert_eq!(rest.len(), len - 1);
-                    let expected_last = (rest.len() > 0).then_some(last);
-                    assert_eq!(rest.last(), expected_last);
+                    let expected_other_side = (rest.len() > 0).then_some(expected_other_side);
+                    assert_eq!(check_other_side(&rest), expected_other_side);
                 }
-                {
-                    let slice = vectorized.as_slice();
-                    let (last_elem, rest) = slice.split_last().unwrap();
-                    assert_eq!(last_elem, last);
-                    assert_eq!(rest.len(), len - 1);
-                    let expected_first = (rest.len() > 0).then_some(first);
-                    assert_eq!(rest.first(), expected_first);
-                }
+                // This part must be a macro because make_vectorized(&mut data)
+                // cannot be packaged as a lambda as that would entail leaking
+                // out references to the lambda's inner state, which is forbidden
+                macro_rules! test_all_splits(
+                    (
+                        $transform_vectorized:expr,
+                        $read_ref:path
+                    ) => {
+                        {
+                            let mut vectorized = make_vectorized(&mut data);
+                            let mut transformed = $transform_vectorized(&mut vectorized);
+                            test_split(
+                                &mut transformed,
+                                |vectorized| vectorized.split_first(),
+                                first,
+                                core::convert::identity,
+                                last,
+                                |rest| rest.last()
+                            );
+                        }
+                        {
+                            let mut vectorized = make_vectorized(&mut data);
+                            let mut transformed = $transform_vectorized(&mut vectorized);
+                            test_split(
+                                &mut transformed,
+                                |vectorized| vectorized.split_first_ref(),
+                                first,
+                                $read_ref,
+                                last,
+                                |rest| rest.last()
+                            );
+                        }
+                        {
+                            let mut vectorized = make_vectorized(&mut data);
+                            let mut transformed = $transform_vectorized(&mut vectorized);
+                            test_split(
+                                &mut transformed,
+                                |vectorized| vectorized.split_last(),
+                                last,
+                                core::convert::identity,
+                                first,
+                                |rest| rest.first()
+                            );
+                        }
+                        {
+                            let mut vectorized = make_vectorized(&mut data);
+                            let mut transformed = $transform_vectorized(&mut vectorized);
+                            test_split(
+                                &mut transformed,
+                                |vectorized| vectorized.split_last_ref(),
+                                last,
+                                $read_ref,
+                                first,
+                                |rest| rest.first()
+                            );
+                        }
+                    }
+                );
+                test_all_splits!(core::convert::identity, read_tuple);
+                test_all_splits!(Vectorized::as_slice, core::convert::identity);
+                test_all_splits!(Vectorized::as_ref_slice, read_tuple);
             }
             assert_eq!(data, initial_data);
         }
 
         // TODO: Test setting data via _ref accessors
-        // TODO: Test split_at(_unchecked)?
+        // TODO: Test split_at(_unchecked)?, remember to test self.len() and above
         // TODO: Leave testing of indexing, iterators and chunks to the dedicated modules
     }
 }
