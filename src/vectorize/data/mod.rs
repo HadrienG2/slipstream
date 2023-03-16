@@ -1284,7 +1284,7 @@ pub(crate) mod tests {
     ///
     /// Satisfies the extra invariant that all inner containers must have the
     /// same SIMD length, denoted `simd_len` in the following.
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub(crate) struct TupleInitInput {
         // Length == `simd_len`
         aligned: Vec<V>,
@@ -1680,41 +1680,48 @@ pub(crate) mod tests {
         /// Test freshly initialized AlignedData(Mut)?
         #[test]
         fn init_aligned(mut data in aligned_init_input(true)) {
+            let initial_data = data.clone();
             let slice_ptr = NonNull::from(data.as_slice());
             let aligned_raw = unsafe { AlignedData::from_data_ptr(slice_ptr) };
 
-            let mut aligned = AlignedData::from(data.as_slice());
-            test_init(
-                slice_ptr,
-                aligned,
-                aligned_raw,
-                AlignedStatic::empty(),
-                AlignedStaticMut::empty(),
-            );
-            assert_eq!(aligned.as_slice(), aligned_raw);
-            assert_eq!(aligned.as_ref_slice(), aligned_raw);
-            unsafe {
-                assert_eq!(aligned.into_aligned_unchecked(), aligned_raw);
-                assert_eq!(aligned.into_unaligned_unchecked(), aligned_raw);
-            }
-
-            test_init(
-                slice_ptr,
-                AlignedDataMut::from(data.as_mut_slice()),
-                aligned_raw,
-                AlignedStatic::empty(),
-                AlignedStaticMut::empty(),
-            );
-            let mut aligned_mut = AlignedDataMut::from(data.as_mut_slice());
-            assert_eq!(aligned_mut.as_slice(), aligned_raw);
-            assert_eq!(aligned_mut.as_ref_slice(), aligned_raw);
-            unsafe {
-                assert_eq!(aligned_mut.into_aligned_unchecked(), aligned_raw);
-                assert_eq!(
-                    AlignedDataMut::from(data.as_mut_slice()).into_unaligned_unchecked(),
-                    aligned_raw
+            {
+                let mut aligned = AlignedData::from(data.as_slice());
+                test_init(
+                    slice_ptr,
+                    aligned,
+                    aligned_raw,
+                    AlignedStatic::empty(),
+                    AlignedStaticMut::empty(),
                 );
+                assert_eq!(aligned.as_slice(), aligned_raw);
+                assert_eq!(aligned.as_ref_slice(), aligned_raw);
+                unsafe {
+                    assert_eq!(aligned.into_aligned_unchecked(), aligned_raw);
+                    assert_eq!(aligned.into_unaligned_unchecked(), aligned_raw);
+                }
             }
+            assert_eq!(data, initial_data);
+
+            {
+                test_init(
+                    slice_ptr,
+                    AlignedDataMut::from(data.as_mut_slice()),
+                    aligned_raw,
+                    AlignedStatic::empty(),
+                    AlignedStaticMut::empty(),
+                );
+                let mut aligned_mut = AlignedDataMut::from(data.as_mut_slice());
+                assert_eq!(aligned_mut.as_slice(), aligned_raw);
+                assert_eq!(aligned_mut.as_ref_slice(), aligned_raw);
+                unsafe {
+                    assert_eq!(aligned_mut.into_aligned_unchecked(), aligned_raw);
+                    assert_eq!(
+                        AlignedDataMut::from(data.as_mut_slice()).into_unaligned_unchecked(),
+                        aligned_raw
+                    );
+                }
+            }
+            assert_eq!(data, initial_data);
         }
 
         /// Test treating arrays as shared slices
@@ -1739,6 +1746,7 @@ pub(crate) mod tests {
         /// Test freshly initialized UnalignedData(Mut)?
         #[test]
         fn init_unaligned(mut data in unaligned_init_input(0)) {
+            let initial_data = data.clone();
             let slice_ptr = NonNull::from(data.as_slice());
             let unaligned_raw = unsafe { UnalignedV::from_data_ptr(slice_ptr) };
             let array_slice = unsafe { std::slice::from_raw_parts(
@@ -1747,45 +1755,53 @@ pub(crate) mod tests {
             ) };
             let array_slice_ptr = NonNull::from(array_slice);
 
-            let mut unaligned = UnalignedV::from(data.as_slice());
-            test_init(
-                array_slice_ptr,
-                unaligned,
-                unaligned_raw,
-                UnalignedStatic::empty(),
-                UnalignedStaticMut::empty(),
-            );
-            assert_eq!(unaligned.as_slice(), unaligned_raw);
-            assert_eq!(unaligned.as_ref_slice(), unaligned_raw);
-            #[allow(clippy::redundant_slicing)]
-            unsafe {
-                assert_eq!(unaligned.into_unaligned_unchecked(), unaligned_raw);
-                let (aligned_base, aligned) = extract_aligned(data.as_mut_slice());
-                assert_eq!(UnalignedV::from(&aligned[..]).into_aligned_unchecked(), aligned_base);
+            {
+                let mut unaligned = UnalignedV::from(data.as_slice());
+                test_init(
+                    array_slice_ptr,
+                    unaligned,
+                    unaligned_raw,
+                    UnalignedStatic::empty(),
+                    UnalignedStaticMut::empty(),
+                );
+                assert_eq!(unaligned.as_slice(), unaligned_raw);
+                assert_eq!(unaligned.as_ref_slice(), unaligned_raw);
+                #[allow(clippy::redundant_slicing)]
+                unsafe {
+                    assert_eq!(unaligned.into_unaligned_unchecked(), unaligned_raw);
+                    let (aligned_base, aligned) = extract_aligned(data.as_mut_slice());
+                    assert_eq!(UnalignedV::from(&aligned[..]).into_aligned_unchecked(), aligned_base);
+                }
             }
+            assert_eq!(data, initial_data);
 
-            let mut unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
-            test_init(
-                array_slice_ptr,
-                unaligned_mut,
-                unaligned_raw,
-                UnalignedStatic::empty(),
-                UnalignedStaticMut::empty(),
-            );
-            unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
-            assert_eq!(unaligned_mut.as_slice(), unaligned_raw);
-            assert_eq!(unaligned_mut.as_ref_slice(), unaligned_raw);
-            unsafe {
-                assert_eq!(UnalignedVMut::from(data.as_mut_slice()).into_unaligned_unchecked(), unaligned_raw);
-                let (aligned_base, aligned) = extract_aligned(data.as_mut_slice());
-                assert_eq!(UnalignedVMut::from(aligned).into_aligned_unchecked(), aligned_base);
+            {
+                let mut unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
+                test_init(
+                    array_slice_ptr,
+                    unaligned_mut,
+                    unaligned_raw,
+                    UnalignedStatic::empty(),
+                    UnalignedStaticMut::empty(),
+                );
+                unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
+                assert_eq!(unaligned_mut.as_slice(), unaligned_raw);
+                assert_eq!(unaligned_mut.as_ref_slice(), unaligned_raw);
+                unsafe {
+                    assert_eq!(UnalignedVMut::from(data.as_mut_slice()).into_unaligned_unchecked(), unaligned_raw);
+                    let (aligned_base, aligned) = extract_aligned(data.as_mut_slice());
+                    assert_eq!(UnalignedVMut::from(aligned).into_aligned_unchecked(), aligned_base);
+                }
             }
+            assert_eq!(data, initial_data);
         }
 
         /// Test freshly initialized PaddedData(Mut)?
         #[test]
         #[allow(clippy::redundant_slicing)]
         fn init_padded((mut data, padding) in padded_init_input(true)) {
+            let initial_data = data.clone();
+
             // Padding is required if data length is not divisible by V::LANES.
             // In that case, constructor should error out if it's not present.
             if (data.len() % V::LANES != 0) && padding.is_none() {
@@ -1793,6 +1809,7 @@ pub(crate) mod tests {
                                  Err(VectorizeError::NeedsPadding)));
                 assert!(matches!(PaddedVMut::new(data.as_mut_slice(), padding),
                                  Err(VectorizeError::NeedsPadding)));
+                assert_eq!(data, initial_data);
                 return Ok(());
             }
 
@@ -1805,50 +1822,54 @@ pub(crate) mod tests {
             ) };
             let array_slice_ptr = NonNull::from(array_slice);
 
-            // Check output of constructing PaddedData
-            let (mut padded, last_elems) = PaddedV::new(data.as_slice(), padding).unwrap();
-            test_init(
-                array_slice_ptr,
-                padded.vectors,
-                unaligned_raw,
-                PaddedStatic::empty(),
-                PaddedStaticMut::empty(),
-            );
-            let expected_last_elems = match data.len() {
-                0 => 0,
-                len if len % V::LANES == 0 => V::LANES,
-                other_len => other_len % V::LANES,
-            };
-            assert_eq!(last_elems, expected_last_elems);
-            let last_vector = (last_elems > 0).then(|| {
-                let last_vector = unsafe { padded.last_vector.assume_init() };
-                let offset = (array_slice.len() - (last_elems == V::LANES) as usize) * V::LANES;
-                let expected_last_vector = V::from_fn(|idx| if idx < last_elems {
-                    data[offset + idx]
-                } else {
-                    padding.unwrap()
+            let (last_elems, last_vector) = {
+                // Check output of constructing PaddedData
+                let (mut padded, last_elems) = PaddedV::new(data.as_slice(), padding).unwrap();
+                test_init(
+                    array_slice_ptr,
+                    padded.vectors,
+                    unaligned_raw,
+                    PaddedStatic::empty(),
+                    PaddedStaticMut::empty(),
+                );
+                let expected_last_elems = match data.len() {
+                    0 => 0,
+                    len if len % V::LANES == 0 => V::LANES,
+                    other_len => other_len % V::LANES,
+                };
+                assert_eq!(last_elems, expected_last_elems);
+                let last_vector = (last_elems > 0).then(|| {
+                    let last_vector = unsafe { padded.last_vector.assume_init() };
+                    let offset = (array_slice.len() - (last_elems == V::LANES) as usize) * V::LANES;
+                    let expected_last_vector = V::from_fn(|idx| if idx < last_elems {
+                        data[offset + idx]
+                    } else {
+                        padding.unwrap()
+                    });
+                    assert_eq!(last_vector, expected_last_vector);
+                    last_vector
                 });
-                assert_eq!(last_vector, expected_last_vector);
-                last_vector
-            });
 
-            // Check output of reinterpreting as a slice
-            {
-                let padded_slice = padded.as_slice();
-                assert_eq!(padded_slice.vectors, unaligned_raw);
-                if let Some(last_vector) = last_vector {
-                    let last_vector_slice = unsafe { padded_slice.last_vector.assume_init() };
-                    assert_eq!(last_vector, last_vector_slice);
+                // Check output of reinterpreting as a slice
+                {
+                    let padded_slice = padded.as_slice();
+                    assert_eq!(padded_slice.vectors, unaligned_raw);
+                    if let Some(last_vector) = last_vector {
+                        let last_vector_slice = unsafe { padded_slice.last_vector.assume_init() };
+                        assert_eq!(last_vector, last_vector_slice);
+                    }
                 }
-            }
-            {
-                let padded_slice_mut = padded.as_ref_slice();
-                assert_eq!(padded_slice_mut.vectors, unaligned_raw);
-                if let Some(last_vector) = last_vector {
-                    let last_vector_slice = unsafe { padded_slice_mut.last_vector.assume_init() };
-                    assert_eq!(last_vector, last_vector_slice);
+                {
+                    let padded_slice_mut = padded.as_ref_slice();
+                    assert_eq!(padded_slice_mut.vectors, unaligned_raw);
+                    if let Some(last_vector) = last_vector {
+                        let last_vector_slice = unsafe { padded_slice_mut.last_vector.assume_init() };
+                        assert_eq!(last_vector, last_vector_slice);
+                    }
                 }
-            }
+                (last_elems, last_vector)
+            };
+            assert_eq!(data, initial_data);
 
             // Check output of reinterpreting as unaligned data
             {
@@ -1857,6 +1878,7 @@ pub(crate) mod tests {
                 assert_eq!(unsafe { padded.into_unaligned_unchecked() }, unaligned_base);
                 assert_eq!(last_elems, V::LANES * (!unaligned_data.is_empty()) as usize);
             }
+            assert_eq!(data, initial_data);
 
             // Check output of reinterpreting as aligned data
             {
@@ -1865,165 +1887,194 @@ pub(crate) mod tests {
                 assert_eq!(unsafe { padded.into_aligned_unchecked() }, aligned_base);
                 assert_eq!(last_elems, V::LANES * (!aligned_data.is_empty()) as usize);
             }
+            assert_eq!(data, initial_data);
 
-            // Check outcome of constructing PaddedDataMut
-            let mut padded_mut = PaddedVMut::new(data.as_mut_slice(), padding).unwrap();
-            if let Some(last_vector) = last_vector {
-                let last_vector_mut = unsafe { padded_mut.inner.last_vector.assume_init() };
-                assert_eq!(last_vector, last_vector_mut);
-            }
-            assert_eq!(padded_mut.num_last_elems, last_elems);
-            test_init(
-                array_slice_ptr,
-                padded_mut.inner.vectors,
-                unaligned_raw,
-                PaddedStatic::empty(),
-                PaddedStaticMut::empty(),
-            );
-
-            // Check outcome of reinterpreting as a slice
             {
-                padded_mut = PaddedVMut::new(data.as_mut_slice(), padding).unwrap();
-                let padded_slice = padded_mut.as_slice();
-                assert_eq!(padded_slice.vectors, unaligned_raw);
+                // Check outcome of constructing PaddedDataMut
+                let mut padded_mut = PaddedVMut::new(data.as_mut_slice(), padding).unwrap();
                 if let Some(last_vector) = last_vector {
-                    let last_vector_slice = unsafe { padded_slice.last_vector.assume_init() };
-                    assert_eq!(last_vector, last_vector_slice);
+                    let last_vector_mut = unsafe { padded_mut.inner.last_vector.assume_init() };
+                    assert_eq!(last_vector, last_vector_mut);
+                }
+                assert_eq!(padded_mut.num_last_elems, last_elems);
+                test_init(
+                    array_slice_ptr,
+                    padded_mut.inner.vectors,
+                    unaligned_raw,
+                    PaddedStatic::empty(),
+                    PaddedStaticMut::empty(),
+                );
+
+                // Check outcome of reinterpreting as a slice
+                {
+                    padded_mut = PaddedVMut::new(data.as_mut_slice(), padding).unwrap();
+                    let padded_slice = padded_mut.as_slice();
+                    assert_eq!(padded_slice.vectors, unaligned_raw);
+                    if let Some(last_vector) = last_vector {
+                        let last_vector_slice = unsafe { padded_slice.last_vector.assume_init() };
+                        assert_eq!(last_vector, last_vector_slice);
+                    }
+                }
+                {
+                    padded_mut = PaddedVMut::new(data.as_mut_slice(), padding).unwrap();
+                    let padded_slice_mut = padded_mut.as_ref_slice();
+                    assert_eq!(padded_slice_mut.inner.vectors, unaligned_raw);
+                    if let Some(last_vector) = last_vector {
+                        let last_vector_slice = unsafe { padded_slice_mut.inner.last_vector.assume_init() };
+                        assert_eq!(last_vector, last_vector_slice);
+                    }
+                    assert_eq!(padded_slice_mut.num_last_elems, last_elems);
                 }
             }
-            {
-                padded_mut = PaddedVMut::new(data.as_mut_slice(), padding).unwrap();
-                let padded_slice_mut = padded_mut.as_ref_slice();
-                assert_eq!(padded_slice_mut.inner.vectors, unaligned_raw);
-                if let Some(last_vector) = last_vector {
-                    let last_vector_slice = unsafe { padded_slice_mut.inner.last_vector.assume_init() };
-                    assert_eq!(last_vector, last_vector_slice);
-                }
-                assert_eq!(padded_slice_mut.num_last_elems, last_elems);
-            }
+            assert_eq!(data, initial_data);
 
             // Check output of reinterpreting as unaligned data
             {
                 let (unaligned_base, unaligned_data) = extract_unaligned(data.as_mut_slice());
-                padded_mut = PaddedVMut::new(unaligned_data, None).unwrap();
+                let padded_mut = PaddedVMut::new(unaligned_data, None).unwrap();
                 assert_eq!(unsafe { padded_mut.into_unaligned_unchecked() }, unaligned_base);
             }
+            assert_eq!(data, initial_data);
 
             // Check output of reinterpreting as aligned data
             {
                 let (aligned_base, aligned_data) = extract_aligned(data.as_mut_slice());
-                padded_mut = PaddedVMut::new(aligned_data, None).unwrap();
+                let padded_mut = PaddedVMut::new(aligned_data, None).unwrap();
                 assert_eq!(unsafe { padded_mut.into_aligned_unchecked() }, aligned_base);
             }
+            assert_eq!(data, initial_data);
         }
 
         /// Test freshly initialized TupleData
         #[test]
-        fn init_tuple(mut init in tuple_init_input(true)) {
-            let base = init.base_ptr();
-            let mut tuple = init.as_tuple_data();
-
+        fn init_tuple(mut data in tuple_init_input(true)) {
+            let initial_data = data.clone();
             {
-                let slice = tuple.as_slice();
-                assert_eq!(slice.0, base.0);
-                assert_eq!(slice.1, base.1);
-                assert_eq!(slice.2, base.2);
-                assert_eq!(slice.3, base.3);
-                assert_eq!(slice.4.vectors, base.4);
-                assert_eq!(slice.5.vectors, base.5);
-            }
+                let base = data.base_ptr();
+                let mut tuple = data.as_tuple_data();
 
-            {
-                let slice = tuple.as_ref_slice();
-                assert_eq!(slice.0, base.0);
-                assert_eq!(slice.1, base.1);
-                assert_eq!(slice.2, base.2);
-                assert_eq!(slice.3, base.3);
-                assert_eq!(slice.4.vectors, base.4);
-                assert_eq!(slice.5.inner.vectors, base.5);
+                {
+                    let slice = tuple.as_slice();
+                    assert_eq!(slice.0, base.0);
+                    assert_eq!(slice.1, base.1);
+                    assert_eq!(slice.2, base.2);
+                    assert_eq!(slice.3, base.3);
+                    assert_eq!(slice.4.vectors, base.4);
+                    assert_eq!(slice.5.vectors, base.5);
+                }
+
+                {
+                    let slice = tuple.as_ref_slice();
+                    assert_eq!(slice.0, base.0);
+                    assert_eq!(slice.1, base.1);
+                    assert_eq!(slice.2, base.2);
+                    assert_eq!(slice.3, base.3);
+                    assert_eq!(slice.4.vectors, base.4);
+                    assert_eq!(slice.5.inner.vectors, base.5);
+                }
             }
+            assert_eq!(data, initial_data);
         }
 
         /// Test the get_unchecked and get_ptr of AlignedData(Mut)?
         #[test]
         fn get_aligned((mut data, idx) in aligned_init_input(false).prop_flat_map(with_data_index)) {
-            let elem = data.simd_element(idx);
-            let base_ptr = data.base_ptr();
-            let is_last = data.is_last(idx);
-
+            let initial_data = data.clone();
             {
-                let mut aligned = AlignedV::from(data.as_slice());
-                assert_eq!(unsafe { aligned.get_ptr(idx) }.as_ptr(),
-                           base_ptr.as_ptr().wrapping_add(idx));
-                assert_eq!(unsafe { aligned.get_unchecked(idx, is_last) }, elem);
-                assert_eq!(unsafe { aligned.get_unchecked_ref(idx, is_last) }, elem);
-            }
+                let elem = data.simd_element(idx);
+                let base_ptr = data.base_ptr();
+                let is_last = data.is_last(idx);
 
-            {
-                let mut aligned_mut = AlignedVMut::from(data.as_mut_slice());
-                assert_eq!(unsafe { aligned_mut.get_unchecked(idx, is_last) }, elem);
-                assert_eq!(*unsafe { aligned_mut.get_unchecked_ref(idx, is_last) }, elem);
+                {
+                    let mut aligned = AlignedV::from(data.as_slice());
+                    assert_eq!(unsafe { aligned.get_ptr(idx) }.as_ptr(),
+                               base_ptr.as_ptr().wrapping_add(idx));
+                    assert_eq!(unsafe { aligned.get_unchecked(idx, is_last) }, elem);
+                    assert_eq!(unsafe { aligned.get_unchecked_ref(idx, is_last) }, elem);
+                }
+
+                {
+                    let mut aligned_mut = AlignedVMut::from(data.as_mut_slice());
+                    assert_eq!(unsafe { aligned_mut.get_unchecked(idx, is_last) }, elem);
+                    assert_eq!(*unsafe { aligned_mut.get_unchecked_ref(idx, is_last) }, elem);
+                }
             }
+            assert_eq!(data, initial_data);
         }
 
         /// Test treating arrays as shared slices
         #[test]
         fn get_array((mut data, idx) in any_aligned_array().prop_flat_map(with_data_index)) {
-            let elem = data.simd_element(idx);
-            let is_last = data.is_last(idx);
-            assert_eq!(unsafe { VectorizedDataImpl::get_unchecked(&data, idx, is_last) }, elem);
-            assert_eq!(unsafe { VectorizedDataImpl::get_unchecked_ref(&mut data, idx, is_last) }, elem);
+            let initial_data = data.clone();
+            {
+                let elem = data.simd_element(idx);
+                let is_last = data.is_last(idx);
+                assert_eq!(unsafe { VectorizedDataImpl::get_unchecked(&data, idx, is_last) }, elem);
+                assert_eq!(unsafe { VectorizedDataImpl::get_unchecked_ref(&mut data, idx, is_last) }, elem);
+            }
+            assert_eq!(data, initial_data);
         }
 
         /// Test the get_unchecked and get_ptr of UnalignedData(Mut)?
         #[test]
         fn get_unaligned((mut data, idx) in unaligned_init_input(V::LANES).prop_flat_map(with_data_index)) {
-            let elem = data.simd_element(idx);
-            let base_ptr = data.base_ptr();
-            let is_last = data.is_last(idx);
-
+            let initial_data = data.clone();
             {
-                let mut unaligned = UnalignedV::from(data.as_slice());
-                assert_eq!(unsafe { unaligned.get_ptr(idx) }.as_ptr(),
-                           base_ptr.as_ptr().wrapping_add(idx));
-                assert_eq!(unsafe { unaligned.get_unchecked_ref(idx, is_last) }, elem);
-            }
+                let elem = data.simd_element(idx);
+                let base_ptr = data.base_ptr();
+                let is_last = data.is_last(idx);
 
-            {
-                let mut unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
-                assert_eq!(unsafe { unaligned_mut.get_unchecked(idx, is_last) }, elem);
-                assert_eq!(*unsafe { unaligned_mut.get_unchecked_ref(idx, is_last) }, elem);
+                {
+                    let mut unaligned = UnalignedV::from(data.as_slice());
+                    assert_eq!(unsafe { unaligned.get_ptr(idx) }.as_ptr(),
+                               base_ptr.as_ptr().wrapping_add(idx));
+                    assert_eq!(unsafe { unaligned.get_unchecked_ref(idx, is_last) }, elem);
+                }
+
+                {
+                    let mut unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
+                    assert_eq!(unsafe { unaligned_mut.get_unchecked(idx, is_last) }, elem);
+                    assert_eq!(*unsafe { unaligned_mut.get_unchecked_ref(idx, is_last) }, elem);
+                }
             }
+            assert_eq!(data, initial_data);
         }
 
         /// Test the get_unchecked and get_ptr of PaddedData(Mut)?
         #[test]
-        fn get_padded((padded_data, idx) in padded_init_input(false).prop_flat_map(with_data_index)) {
-            let elem = padded_data.simd_element(idx);
-            let base_ptr = padded_data.base_ptr();
-            let is_last = padded_data.is_last(idx);
-
+        fn get_padded((mut padded_data, idx) in padded_init_input(false).prop_flat_map(with_data_index)) {
+            let initial_data = padded_data.0.clone();
             {
-                let (data, padding) = &padded_data;
-                let mut padded = PaddedV::new(data.as_slice(), *padding).unwrap().0;
-                assert_eq!(unsafe { padded.get_ptr(idx) }.as_ptr(),
-                           base_ptr.as_ptr().wrapping_add(idx));
-                assert_eq!(unsafe { padded.get_unchecked_ref(idx, is_last) }, elem);
-            }
+                let elem = padded_data.simd_element(idx);
+                let base_ptr = padded_data.base_ptr();
+                let is_last = padded_data.is_last(idx);
 
-            {
-                let (mut data, padding) = padded_data;
-                let mut padded_mut = PaddedVMut::new(data.as_mut_slice(), padding).unwrap();
-                assert_eq!(unsafe { padded_mut.get_unchecked(idx, is_last) }, elem);
-                assert_eq!(*unsafe { padded_mut.get_unchecked_ref(idx, is_last) }, elem);
+                {
+                    let (data, padding) = &padded_data;
+                    let mut padded = PaddedV::new(data.as_slice(), *padding).unwrap().0;
+                    assert_eq!(unsafe { padded.get_ptr(idx) }.as_ptr(),
+                               base_ptr.as_ptr().wrapping_add(idx));
+                    assert_eq!(unsafe { padded.get_unchecked_ref(idx, is_last) }, elem);
+                }
+
+                {
+                    let (data, padding) = &mut padded_data;
+                    let mut padded_mut = PaddedVMut::new(data.as_mut_slice(), *padding).unwrap();
+                    assert_eq!(unsafe { padded_mut.get_unchecked(idx, is_last) }, elem);
+                    assert_eq!(*unsafe { padded_mut.get_unchecked_ref(idx, is_last) }, elem);
+                }
             }
+            assert_eq!(padded_data.0, initial_data);
         }
 
         /// Test reading and writing through the get_unchecked(_mut) of TupleData
         #[test]
         fn access_tuple((mut data, idx) in tuple_init_input(false).prop_flat_map(with_data_index)) {
+            let initial_data = data.clone();
+            let len = data.simd_len();
             let elem = data.simd_element(idx);
             let is_last = data.is_last(idx);
+
             {
                 let mut tuple = data.as_tuple_data();
                 assert_eq!(unsafe { tuple.get_unchecked(idx, is_last) }, elem);
@@ -2034,13 +2085,22 @@ pub(crate) mod tests {
                 *unaligned_mut = !elem.3;
                 *padded_mut = !elem.5;
             }
-            let new_elem = data.simd_element(idx);
-            assert_eq!(new_elem.0, elem.0);
-            assert_ne!(new_elem.1, elem.1);
-            assert_eq!(new_elem.2, elem.2);
-            assert_ne!(new_elem.3, elem.3);
-            assert_eq!(new_elem.4, elem.4);
-            assert_ne!(new_elem.5, elem.5);
+
+            for i in 0..len {
+                if i == idx {
+                    let new_elem = data.simd_element(idx);
+                    assert_eq!(new_elem.0, elem.0);
+                    assert_eq!(new_elem.1, !elem.1);
+                    assert_eq!(new_elem.2, elem.2);
+                    assert_eq!(new_elem.3, !elem.3);
+                    assert_eq!(new_elem.4, elem.4);
+                    // Padded pattern is complicated to predict due to padding,
+                    // and we're already testing setting of padded data elsewhere
+                    assert_ne!(new_elem.5, elem.5);
+                } else {
+                    assert_eq!(data.simd_element(i), initial_data.simd_element(i));
+                }
+            }
         }
 
         /// Test writing through the get_unchecked_mut of AlignedDataMut
@@ -2050,13 +2110,23 @@ pub(crate) mod tests {
                                                 .prop_flat_map(with_data_index),
                                             any_v())
         ) {
+            let initial_data = data.clone();
+            let len = data.simd_len();
             let is_last = data.is_last(idx);
+
             {
                 let mut aligned_mut = AlignedVMut::from(data.as_mut_slice());
                 let elem_ref = unsafe { aligned_mut.get_unchecked_ref(idx, is_last) };
                 *elem_ref = new_elem;
             }
-            assert_eq!(data.simd_element(idx), new_elem);
+
+            for i in 0..len {
+                if i == idx {
+                    assert_eq!(data.simd_element(idx), new_elem);
+                } else {
+                    assert_eq!(data.simd_element(i), initial_data.simd_element(i));
+                }
+            }
         }
 
         /// Test writing through the get_unchecked_mut of UnalignedDataMut
@@ -2066,13 +2136,23 @@ pub(crate) mod tests {
                                                 .prop_flat_map(with_data_index),
                                             any_v())
         ) {
+            let initial_data = data.clone();
+            let len = data.simd_len();
             let is_last = data.is_last(idx);
+
             {
                 let mut unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
                 let mut elem_ref = unsafe { unaligned_mut.get_unchecked_ref(idx, is_last) };
                 *elem_ref = new_elem;
             }
-            assert_eq!(data.simd_element(idx), new_elem);
+
+            for i in 0..len {
+                if i == idx {
+                    assert_eq!(data.simd_element(idx), new_elem);
+                } else {
+                    assert_eq!(data.simd_element(i), initial_data.simd_element(i));
+                }
+            }
         }
 
         /// Test writing through the get_unchecked_mut of PaddedDataMut
@@ -2082,6 +2162,8 @@ pub(crate) mod tests {
                                                         .prop_flat_map(with_data_index),
                                                    any_v())
         ) {
+            let initial_data = padded_data.clone();
+            let len = padded_data.simd_len();
             let is_last = padded_data.is_last(idx);
 
             let mut num_last_elems = padded_data.0.len() % V::LANES;
@@ -2096,21 +2178,28 @@ pub(crate) mod tests {
                 *elem_ref = new_elem;
             }
 
-            assert_eq!(
-                padded_data.simd_element(idx),
-                V::from_fn(|i| {
-                    if !is_last || i < num_last_elems {
-                        new_elem[i]
-                    } else {
-                        padded_data.1.unwrap()
-                    }
-                })
-            );
+            for i in 0..len {
+                if i == idx {
+                    assert_eq!(
+                        padded_data.simd_element(idx),
+                        V::from_fn(|i| {
+                            if !is_last || i < num_last_elems {
+                                new_elem[i]
+                            } else {
+                                padded_data.1.unwrap()
+                            }
+                        })
+                    );
+                } else {
+                    assert_eq!(padded_data.simd_element(i), initial_data.simd_element(i));
+                }
+            }
         }
 
         /// Test the split_at_unchecked of AlignedData(Mut)?
         #[test]
         fn split_aligned((mut data, mid) in aligned_init_input(false).prop_flat_map(with_split_index)) {
+            let initial_data = data.clone();
             let base_ptr = data.base_ptr();
             let len = data.simd_len();
             let is_end = mid == len;
@@ -2124,6 +2213,7 @@ pub(crate) mod tests {
                     assert_eq!(rhs, nonnull(base_ptr.as_ptr().wrapping_add(mid)));
                 }
             }
+            assert_eq!(data, initial_data);
 
             {
                 let aligned_mut = AlignedVMut::from(data.as_mut_slice());
@@ -2133,11 +2223,13 @@ pub(crate) mod tests {
                     assert_eq!(rhs, nonnull(base_ptr.as_ptr().wrapping_add(mid)));
                 }
             }
+            assert_eq!(data, initial_data);
         }
 
         /// Test the split_at_unchecked of UnalignedData(Mut)?
         #[test]
         fn split_unaligned((mut data, mid) in unaligned_init_input(V::LANES).prop_flat_map(with_split_index)) {
+            let initial_data = data.clone();
             let base_ptr = data.base_ptr();
             let len = data.simd_len();
             let is_end = mid == len;
@@ -2151,6 +2243,7 @@ pub(crate) mod tests {
                     assert_eq!(rhs, nonnull(base_ptr.as_ptr().wrapping_add(mid)));
                 }
             }
+            assert_eq!(data, initial_data);
 
             {
                 let unaligned_mut = UnalignedVMut::from(data.as_mut_slice());
@@ -2160,11 +2253,13 @@ pub(crate) mod tests {
                     assert_eq!(rhs, nonnull(base_ptr.as_ptr().wrapping_add(mid)));
                 }
             }
+            assert_eq!(data, initial_data);
         }
 
         /// Test the split_at_unchecked of PaddedData(Mut)?
         #[test]
-        fn split_padded((padded_data, mid) in padded_init_input(false).prop_flat_map(with_split_index)) {
+        fn split_padded((mut padded_data, mid) in padded_init_input(false).prop_flat_map(with_split_index)) {
+            let initial_data = padded_data.0.clone();
             let elem_before_mid = padded_data.simd_element(mid.saturating_sub(1));
             let base_ptr = padded_data.base_ptr();
             let len = padded_data.simd_len();
@@ -2208,10 +2303,11 @@ pub(crate) mod tests {
                 check_padded_split(&lhs, &rhs, last_vector);
                 num_last_elems
             };
+            assert_eq!(padded_data.0, initial_data);
 
             {
-                let (mut data, padding) = padded_data;
-                let padded_mut = PaddedVMut::new(data.as_mut_slice(), padding).unwrap();
+                let (data, padding) = &mut padded_data;
+                let padded_mut = PaddedVMut::new(data.as_mut_slice(), *padding).unwrap();
                 let last_vector = unsafe { padded_mut.inner.last_vector.assume_init() };
                 let (lhs, rhs) = unsafe { padded_mut.split_at_unchecked(mid, len) };
                 check_padded_split(&lhs.inner, &rhs.inner, last_vector);
@@ -2226,79 +2322,92 @@ pub(crate) mod tests {
                     assert_eq!(rhs.num_last_elems, 0);
                 }
             }
+            assert_eq!(padded_data.0, initial_data);
         }
 
         /// Test the split_at_unchecked of TupleData
         #[test]
         fn split_tuple((mut data, mid) in tuple_init_input(false).prop_flat_map(with_split_index)) {
-            let base_ptr = data.base_ptr();
-            let len = data.simd_len();
-            let tuple = data.as_tuple_data();
-            let (lhs, rhs) = unsafe { tuple.split_at_unchecked(mid, len) };
-            if mid != 0 {
-                assert_eq!(lhs.0, base_ptr.0);
-                assert_eq!(lhs.1, base_ptr.1);
-                assert_eq!(lhs.2, base_ptr.2);
-                assert_eq!(lhs.3, base_ptr.3);
-                assert_eq!(lhs.4.vectors, base_ptr.4);
-                assert_eq!(lhs.5.inner.vectors, base_ptr.5);
+            let initial_data = data.clone();
+            {
+                let base_ptr = data.base_ptr();
+                let len = data.simd_len();
+                let tuple = data.as_tuple_data();
+                let (lhs, rhs) = unsafe { tuple.split_at_unchecked(mid, len) };
+                if mid != 0 {
+                    assert_eq!(lhs.0, base_ptr.0);
+                    assert_eq!(lhs.1, base_ptr.1);
+                    assert_eq!(lhs.2, base_ptr.2);
+                    assert_eq!(lhs.3, base_ptr.3);
+                    assert_eq!(lhs.4.vectors, base_ptr.4);
+                    assert_eq!(lhs.5.inner.vectors, base_ptr.5);
+                }
+                if mid != len {
+                    let nonnull_v = |ptr: *mut V| NonNull::new(ptr).unwrap();
+                    let nonnull_array = |ptr: *mut VArray| NonNull::new(ptr).unwrap();
+                    assert_eq!(rhs.0, nonnull_v(base_ptr.0.as_ptr().wrapping_add(mid)));
+                    assert_eq!(rhs.1, nonnull_v(base_ptr.1.as_ptr().wrapping_add(mid)));
+                    assert_eq!(rhs.2, nonnull_array(base_ptr.2.as_ptr().wrapping_add(mid)));
+                    assert_eq!(rhs.3, nonnull_array(base_ptr.3.as_ptr().wrapping_add(mid)));
+                    assert_eq!(rhs.4.vectors, nonnull_array(base_ptr.4.as_ptr().wrapping_add(mid)));
+                    assert_eq!(rhs.5.inner.vectors, nonnull_array(base_ptr.5.as_ptr().wrapping_add(mid)));
+                }
             }
-            if mid != len {
-                let nonnull_v = |ptr: *mut V| NonNull::new(ptr).unwrap();
-                let nonnull_array = |ptr: *mut VArray| NonNull::new(ptr).unwrap();
-                assert_eq!(rhs.0, nonnull_v(base_ptr.0.as_ptr().wrapping_add(mid)));
-                assert_eq!(rhs.1, nonnull_v(base_ptr.1.as_ptr().wrapping_add(mid)));
-                assert_eq!(rhs.2, nonnull_array(base_ptr.2.as_ptr().wrapping_add(mid)));
-                assert_eq!(rhs.3, nonnull_array(base_ptr.3.as_ptr().wrapping_add(mid)));
-                assert_eq!(rhs.4.vectors, nonnull_array(base_ptr.4.as_ptr().wrapping_add(mid)));
-                assert_eq!(rhs.5.inner.vectors, nonnull_array(base_ptr.5.as_ptr().wrapping_add(mid)));
-            }
+            assert_eq!(data, initial_data);
         }
 
         /// Test comparison of AlignedData(Mut)?
         #[test]
-        fn cmp_aligned([mut data1, mut data2] in uniform2(aligned_init_input(true))) {
-            let base1 = data1.base_ptr();
-            let base2 = data2.base_ptr();
-            let eq = base1 == base2; // Should usually be false, we're testing true above
-            let cmp = base1.partial_cmp(&base2);
+        fn cmp_aligned(mut data_pair in uniform2(aligned_init_input(true))) {
+            let initial_data = data_pair.clone();
+            let base: [_; 2] = core::array::from_fn(|idx| data_pair[idx].base_ptr());
+            let eq = base[0] == base[1]; // Should usually be false, we're testing true above
+            let cmp = base[0].partial_cmp(&base[1]);
 
             {
-                let aligned1 = AlignedV::from(data1.as_slice());
-                let aligned2 = AlignedV::from(data2.as_slice());
-                assert_eq!(aligned1 == aligned2, eq);
-                assert_eq!(aligned1.partial_cmp(&aligned2), cmp);
+                let aligned: [_; 2] = core::array::from_fn(|idx| AlignedV::from(data_pair[idx].as_slice()));
+                assert_eq!(aligned[0] == aligned[1], eq);
+                assert_eq!(aligned[0].partial_cmp(&aligned[1]), cmp);
             }
+            assert_eq!(data_pair, initial_data);
 
             {
-                let aligned1_mut = AlignedVMut::from(data1.as_mut_slice());
-                let aligned2_mut = AlignedVMut::from(data2.as_mut_slice());
-                assert_eq!(aligned1_mut == aligned2_mut, eq);
-                assert_eq!(aligned1_mut.partial_cmp(&aligned2_mut), cmp);
+                let [data1, data2] = &mut data_pair;
+                let aligned_mut = [
+                    AlignedVMut::from(data1.as_mut_slice()),
+                    AlignedVMut::from(data2.as_mut_slice())
+                ];
+                assert_eq!(aligned_mut[0] == aligned_mut[1], eq);
+                assert_eq!(aligned_mut[0].partial_cmp(&aligned_mut[1]), cmp);
             }
+            assert_eq!(data_pair, initial_data);
         }
 
         /// Test comparison of UnalignedData(Mut)?
         #[test]
-        fn cmp_unaligned([mut data1, mut data2] in uniform2(unaligned_init_input(0))) {
-            let base1 = data1.base_ptr();
-            let base2 = data2.base_ptr();
-            let eq = base1 == base2; // Should usually be false, we're testing true above
-            let cmp = base1.partial_cmp(&base2);
+        fn cmp_unaligned(mut data_pair in uniform2(unaligned_init_input(0))) {
+            let initial_data = data_pair.clone();
+            let base: [_; 2] = core::array::from_fn(|idx| data_pair[idx].base_ptr());
+            let eq = base[0] == base[1]; // Should usually be false, we're testing true above
+            let cmp = base[0].partial_cmp(&base[1]);
 
             {
-                let unaligned1 = UnalignedV::from(data1.as_slice());
-                let unaligned2 = UnalignedV::from(data2.as_slice());
-                assert_eq!(unaligned1 == unaligned2, eq);
-                assert_eq!(unaligned1.partial_cmp(&unaligned2), cmp);
+                let unaligned: [_; 2] = core::array::from_fn(|idx| UnalignedV::from(data_pair[idx].as_slice()));
+                assert_eq!(unaligned[0] == unaligned[1], eq);
+                assert_eq!(unaligned[0].partial_cmp(&unaligned[1]), cmp);
             }
+            assert_eq!(data_pair, initial_data);
 
             {
-                let unaligned1_mut = UnalignedVMut::from(data1.as_mut_slice());
-                let unaligned2_mut = UnalignedVMut::from(data2.as_mut_slice());
-                assert_eq!(unaligned1_mut == unaligned2_mut, eq);
-                assert_eq!(unaligned1_mut.partial_cmp(&unaligned2_mut), cmp);
+                let [data1, data2] = &mut data_pair;
+                let unaligned_mut = [
+                    UnalignedVMut::from(data1.as_mut_slice()),
+                    UnalignedVMut::from(data2.as_mut_slice())
+                ];
+                assert_eq!(unaligned_mut[0] == unaligned_mut[1], eq);
+                assert_eq!(unaligned_mut[0].partial_cmp(&unaligned_mut[1]), cmp);
             }
+            assert_eq!(data_pair, initial_data);
         }
     }
 }
