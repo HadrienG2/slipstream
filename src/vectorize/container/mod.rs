@@ -500,7 +500,7 @@ pub type VectorizedUnaligned<V, Data> = Vectorized<V, <Data as VectorizedDataImp
 pub type VectorizedPadded<V, Data> = Vectorized<V, Data>;
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
     use crate::vectorize::{
         data::tests::{read_tuple, tuple_init_input, SimdData, TupleData, TupleInitInput},
@@ -508,7 +508,8 @@ pub(crate) mod tests {
     };
     use proptest::prelude::*;
 
-    // TODO: pub(crate) slice index generators
+    // TODO: with_invalid_data_index and with_invalid_split_index generators
+    // TODO: slice index generators
     // TODO: Add tuple data generator to data/mod.rs and use it for tuple tests
 
     proptest! {
