@@ -1220,7 +1220,10 @@ impl_vectorized_for_tuple!(A, B, C, D, E, F, G, H);
 pub(crate) mod tests {
     use super::*;
     use crate::vectorize::tests::{any_v, VArray, VScalar, V};
-    use proptest::{array::uniform2, prelude::*};
+    use proptest::{
+        array::{uniform2, uniform3},
+        prelude::*,
+    };
     use std::{collections::hash_map::DefaultHasher, hash::Hasher};
 
     // === COMMON TEST HARNESS ===
@@ -1491,7 +1494,7 @@ pub(crate) mod tests {
             self.aligned.len()
         }
 
-        type Element = (V, V, V, V, V, V);
+        type Element = TupleElem;
         fn simd_element(&self, idx: usize) -> Self::Element {
             (
                 self.aligned.simd_element(idx),
@@ -1529,16 +1532,21 @@ pub(crate) mod tests {
         (Just(data), 0..=simd_len)
     }
 
-    /// Read all the values from the output of get_unchecked_ref on TupleData
+    /// Output of get_unchecked on TupleData
+    pub(crate) type TupleElem = (V, V, V, V, V, V);
+    //
+    /// Output of get_unchecked_ref on TupleData
     pub(crate) type TupleRef<'a> = (V, &'a mut V, V, UnalignedMut<'a, V>, V, PaddedMut<'a, V>);
     //
-    pub(crate) fn read_tuple(tuple: TupleRef) -> (V, V, V, V, V, V) {
+    /// Read all data from TupleRef and discard it
+    pub(crate) fn read_tuple(tuple: TupleRef) -> TupleElem {
         read_from_tuple(&tuple)
     }
     //
+    /// Read all data from a borrowed TupleRef
     pub(crate) fn read_from_tuple(
         (aligned, aligned_mut, unaligned, unaligned_mut, padded, padded_mut): &TupleRef,
-    ) -> (V, V, V, V, V, V) {
+    ) -> TupleElem {
         (
             *aligned,
             **aligned_mut,
@@ -1547,6 +1555,44 @@ pub(crate) mod tests {
             *padded,
             **padded_mut,
         )
+    }
+    //
+    /// Data needed to fully change all mutable state behind TupleRef
+    pub(crate) type TupleWrite = [V; 3];
+    //
+    /// Random generator for TupleWrite data
+    pub(crate) fn any_tuple_write() -> impl Strategy<Value = TupleWrite> {
+        uniform3(any_v())
+    }
+    //
+    /// Commit TupleWrite data into a TupleRef
+    pub(crate) fn write_tuple(tuple: &mut TupleRef, data: TupleWrite) {
+        *tuple.1 = data[0];
+        *tuple.3 = data[1];
+        *tuple.5 = data[2];
+    }
+    //
+    /// Check that a write went well
+    pub(crate) fn check_tuple_write(
+        data: &TupleInitInput,
+        idx: usize,
+        old: TupleElem,
+        write: TupleWrite,
+    ) {
+        let new = data.simd_element(idx);
+        assert_eq!(new.0, old.0);
+        assert_eq!(new.1, write[0]);
+        assert_eq!(new.2, old.2);
+        assert_eq!(new.3, write[1]);
+        assert_eq!(new.4, old.4);
+        if idx < data.simd_len() - 1 {
+            assert_eq!(new.5, write[2]);
+        } else {
+            // Padded pattern at end is complicated to predict due to padding,
+            // and we're already testing setting of padded data elsewhere, so
+            // here we're only testing that it's different if it should be.
+            assert_eq!(new.5 == old.5, old.5 == write[2]);
+        }
     }
 
     // === TESTS FOR THIS MODULE ===
@@ -2067,40 +2113,19 @@ pub(crate) mod tests {
             assert_eq!(padded_data.0, initial_data);
         }
 
-        /// Test reading and writing through the get_unchecked(_mut) of TupleData
+        /// Test reading through the get_unchecked(_ref) of TupleData
         #[test]
-        fn access_tuple((mut data, idx) in tuple_init_input(false).prop_flat_map(with_data_index)) {
+        fn get_tuple((mut data, idx) in tuple_init_input(false).prop_flat_map(with_data_index)) {
             let initial_data = data.clone();
-            let len = data.simd_len();
             let elem = data.simd_element(idx);
             let is_last = data.is_last(idx);
-
             {
                 let mut tuple = data.as_tuple_data();
                 assert_eq!(unsafe { tuple.get_unchecked(idx, is_last) }, elem);
                 let output = unsafe { tuple.get_unchecked_ref(idx, is_last) };
                 assert_eq!(read_from_tuple(&output), elem);
-                let (_, aligned_mut, _, mut unaligned_mut, _, mut padded_mut) = output;
-                *aligned_mut = !elem.1;
-                *unaligned_mut = !elem.3;
-                *padded_mut = !elem.5;
             }
-
-            for i in 0..len {
-                if i == idx {
-                    let new_elem = data.simd_element(idx);
-                    assert_eq!(new_elem.0, elem.0);
-                    assert_eq!(new_elem.1, !elem.1);
-                    assert_eq!(new_elem.2, elem.2);
-                    assert_eq!(new_elem.3, !elem.3);
-                    assert_eq!(new_elem.4, elem.4);
-                    // Padded pattern is complicated to predict due to padding,
-                    // and we're already testing setting of padded data elsewhere
-                    assert_ne!(new_elem.5, elem.5);
-                } else {
-                    assert_eq!(data.simd_element(i), initial_data.simd_element(i));
-                }
-            }
+            assert_eq!(data, initial_data);
         }
 
         /// Test writing through the get_unchecked_mut of AlignedDataMut
@@ -2192,6 +2217,32 @@ pub(crate) mod tests {
                     );
                 } else {
                     assert_eq!(padded_data.simd_element(i), initial_data.simd_element(i));
+                }
+            }
+        }
+
+        /// Test writing through the get_unchecked_mut of TupleData
+        #[test]
+        fn set_tuple(((mut data, idx), write) in (tuple_init_input(false)
+                                                        .prop_flat_map(with_data_index),
+                                                     any_tuple_write())) {
+            let initial_data = data.clone();
+            let len = data.simd_len();
+            let old_elem = data.simd_element(idx);
+            let is_last = data.is_last(idx);
+
+            {
+                let mut tuple = data.as_tuple_data();
+                assert_eq!(unsafe { tuple.get_unchecked(idx, is_last) }, old_elem);
+                let mut output = unsafe { tuple.get_unchecked_ref(idx, is_last) };
+                write_tuple(&mut output, write);
+            }
+
+            for i in 0..len {
+                if i == idx {
+                    check_tuple_write(&data, idx, old_elem, write);
+                } else {
+                    assert_eq!(data.simd_element(i), initial_data.simd_element(i));
                 }
             }
         }

@@ -503,14 +503,34 @@ pub type VectorizedPadded<V, Data> = Vectorized<V, Data>;
 mod tests {
     use super::*;
     use crate::vectorize::{
-        data::tests::{read_tuple, tuple_init_input, SimdData, TupleData, TupleInitInput},
+        data::tests::{
+            any_tuple_write, check_tuple_write, read_tuple, tuple_init_input, write_tuple,
+            SimdData, TupleData, TupleElem, TupleInitInput, TupleWrite,
+        },
         tests::V,
     };
     use proptest::prelude::*;
 
-    // TODO: with_invalid_data_index and with_invalid_split_index generators
-    // TODO: slice index generators
-    // TODO: Add tuple data generator to data/mod.rs and use it for tuple tests
+    /// Variant of with_split_index from the data module, which generates
+    /// indices that are _not_ valid for slipping a certain dataset.
+    fn with_invalid_split_index<Data: SimdData>(
+        data: Data,
+    ) -> impl Strategy<Value = (Data, usize)> {
+        let simd_len = data.simd_len();
+        (Just(data), (simd_len + 1)..)
+    }
+
+    /// Build a Vectorized view for a TupleData dataset
+    fn make_vectorized(data: &mut TupleInitInput) -> Vectorized<V, TupleData> {
+        let len = data.simd_len();
+        let data = data.as_tuple_data();
+        unsafe { Vectorized::from_raw_parts(data, len) }
+    }
+
+    // TODO: with_invalid_data_index generators => index module
+    // TODO: slice index generators => index module
+    // TODO: Leave testing of indexing, iterators and chunks to the dedicated modules
+    //       Remember to test setting data, not just getting it.
 
     proptest! {
         /// Test properties of a freshly created Vectorized container
@@ -523,11 +543,6 @@ mod tests {
                 let first = (!is_empty).then(|| data.simd_element(0));
                 let last = (!is_empty).then(|| data.simd_element(len - 1));
 
-                fn make_vectorized(data: &mut TupleInitInput) -> Vectorized<V, TupleData> {
-                    let len = data.simd_len();
-                    let data = data.as_tuple_data();
-                    unsafe { Vectorized::from_raw_parts(data, len) }
-                }
                 let mut vectorized = make_vectorized(&mut data);
 
                 fn check_basics<V: VectorInfo, Data: VectorizedDataImpl<V>>(
@@ -590,7 +605,6 @@ mod tests {
 
                 // Splitting is destructive, so we must recreate the container
                 // or slice being split after every test.
-                type TupleElem = <TupleInitInput as SimdData>::Element;
                 fn test_split<
                     'vec,
                     'data: 'vec,
@@ -677,8 +691,90 @@ mod tests {
             assert_eq!(data, initial_data);
         }
 
-        // TODO: Test setting data via _ref accessors
+        /// Test setting data via _ref accessors
+        #[test]
+        fn set_first_last((data, write) in (tuple_init_input(false), any_tuple_write())) {
+            // Common logic for every write
+            fn check_data_write(
+                initial_data: &TupleInitInput,
+                write_tuple: impl FnOnce(&mut TupleInitInput, TupleWrite),
+                written_idx: usize,
+                write: TupleWrite
+            ) {
+                let initial_value = initial_data.simd_element(written_idx);
+                let mut data = initial_data.clone();
+                write_tuple(&mut data, write);
+                for i in 0..initial_data.simd_len() {
+                    if i == written_idx {
+                        check_tuple_write(&data, i, initial_value, write);
+                    } else {
+                        assert_eq!(data.simd_element(i), initial_data.simd_element(i));
+                    }
+                }
+            }
+
+            // This part must be macrofied due to GAT/trait solver limitations
+            macro_rules! check_all_simple_writes(
+                (
+                    $get_ref:path,
+                    $split_ref:path,
+                    $write_idx:expr
+                ) => {
+                    // Simple write to target element
+                    check_data_write(
+                        &data,
+                        |data, write| {
+                            let mut vectorized = make_vectorized(data);
+                            let mut elem_ref = $get_ref(&mut vectorized).unwrap();
+                            write_tuple(&mut elem_ref, write);
+                        },
+                        $write_idx,
+                        write
+                    );
+
+                    // Write to target element through RefSlice
+                    check_data_write(
+                        &data,
+                        |data, write| {
+                            let mut vectorized = make_vectorized(data);
+                            let mut slice = vectorized.as_ref_slice();
+                            let mut elem_ref = $get_ref(&mut slice).unwrap();
+                            write_tuple(&mut elem_ref, write);
+                        },
+                        $write_idx,
+                        write
+                    );
+
+                    // Write to target element through splitting
+                    check_data_write(
+                        &data,
+                        |data, write| {
+                            let mut vectorized = make_vectorized(data);
+                            let (mut elem_ref, _rest) = $split_ref(&mut vectorized).unwrap();
+                            write_tuple(&mut elem_ref, write);
+                        },
+                        $write_idx,
+                        write
+                    );
+
+                    // Write to target element through splitting a RefSlice
+                    check_data_write(
+                        &data,
+                        |data, write| {
+                            let mut vectorized = make_vectorized(data);
+                            let mut slice = vectorized.as_ref_slice();
+                            let (mut elem_ref, _rest) = $split_ref(&mut slice).unwrap();
+                            write_tuple(&mut elem_ref, write);
+                        },
+                        $write_idx,
+                        write
+                    );
+                }
+            );
+            check_all_simple_writes!(Vectorized::first_ref, Vectorized::split_first_ref, 0);
+            check_all_simple_writes!(Vectorized::last_ref, Vectorized::split_last_ref, data.simd_len() - 1);
+        }
+
         // TODO: Test split_at(_unchecked)?, remember to test self.len() and above
-        // TODO: Leave testing of indexing, iterators and chunks to the dedicated modules
     }
 }
