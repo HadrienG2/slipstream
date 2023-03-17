@@ -504,12 +504,13 @@ mod tests {
     use super::*;
     use crate::vectorize::{
         data::tests::{
-            any_tuple_write, check_tuple_write, read_tuple, tuple_init_input, write_tuple,
-            SimdData, TupleData, TupleElem, TupleInitInput, TupleWrite,
+            any_tuple_write, check_tuple_write, read_tuple, tuple_init_input, with_split_index,
+            write_tuple, SimdData, TupleData, TupleElem, TupleInitInput, TupleWrite,
         },
         tests::V,
     };
     use proptest::prelude::*;
+    use std::panic::AssertUnwindSafe;
 
     /// Variant of with_split_index from the data module, which generates
     /// indices that are _not_ valid for slipping a certain dataset.
@@ -527,10 +528,10 @@ mod tests {
         unsafe { Vectorized::from_raw_parts(data, len) }
     }
 
-    // TODO: with_invalid_data_index generators => index module
-    // TODO: slice index generators => index module
     // TODO: Leave testing of indexing, iterators and chunks to the dedicated modules
     //       Remember to test setting data, not just getting it.
+    // TODO: with_invalid_data_index generators => index module
+    // TODO: slice index generators => index module
 
     proptest! {
         /// Test properties of a freshly created Vectorized container
@@ -772,9 +773,82 @@ mod tests {
                 }
             );
             check_all_simple_writes!(Vectorized::first_ref, Vectorized::split_first_ref, 0);
-            check_all_simple_writes!(Vectorized::last_ref, Vectorized::split_last_ref, data.simd_len() - 1);
+            let last_idx = data.simd_len() - 1;
+            check_all_simple_writes!(Vectorized::last_ref, Vectorized::split_last_ref, last_idx);
         }
 
-        // TODO: Test split_at(_unchecked)?, remember to test self.len() and above
+        /// Test splitting with a valid index
+        #[test]
+        fn valid_split((mut data, mid) in tuple_init_input(true).prop_flat_map(with_split_index)) {
+            let initial_data = data.clone();
+            {
+                fn test_split<
+                    ElementCopy: Debug + PartialEq,
+                    SliceData: VectorizedSliceImpl<V, ElementCopy = ElementCopy>
+                >(
+                    slice: Vectorized<V, SliceData>,
+                    split: impl FnOnce(Vectorized<V, SliceData>, usize) -> (Vectorized<V, SliceData>, Vectorized<V, SliceData>),
+                    mid: usize,
+                ) {
+                    let len = slice.len();
+                    let first = slice.first();
+                    let last = slice.last();
+                    let empty = Vectorized::<V, SliceData>::empty();
+
+                    let (left, right) = split(slice, mid);
+
+                    assert_eq!(left.len(), mid);
+                    assert_eq!(right.len(), len - mid);
+
+                    if mid > 0 {
+                        assert_eq!(left.first(), first);
+                        assert_ne!(left, empty);
+                    } else {
+                        assert_eq!(right.first(), first);
+                        assert_eq!(left, empty);
+                    }
+
+                    if mid < len {
+                        assert_eq!(right.last(), last);
+                        assert_ne!(right, empty);
+                    } else {
+                        assert_eq!(left.last(), last);
+                        assert_eq!(right, empty);
+                    }
+                }
+                let mut vectorized = make_vectorized(&mut data);
+                test_split(vectorized.as_slice(), Vectorized::split_at, mid);
+                test_split(vectorized.as_slice(), |slice, mid| unsafe { slice.split_at_unchecked(mid) }, mid);
+                test_split(vectorized.as_ref_slice(), Vectorized::split_at, mid);
+                test_split(vectorized.as_ref_slice(), |slice, mid| unsafe { slice.split_at_unchecked(mid) }, mid);
+            }
+            assert_eq!(data, initial_data);
+        }
+
+        /// Test splitting with an invalid index
+        ///
+        /// Although it may seem a unified valid/invalid splitting test could be
+        /// done, it would be hard to write it in such a way that we test both
+        /// valid and invalid split indices with roughly equal probability, and
+        /// not an overwhelming majority of invalid indices.
+        ///
+        #[test]
+        fn invalid_split((mut data, mid) in tuple_init_input(true).prop_flat_map(with_invalid_split_index)) {
+            let initial_data = data.clone();
+            {
+                let mut vectorized = make_vectorized(&mut data);
+
+                let slice = vectorized.as_slice();
+                std::panic::catch_unwind(AssertUnwindSafe(move || {
+                    slice.split_at(mid)
+                })).unwrap_err();
+
+                let ref_slice = vectorized.as_ref_slice();
+                std::panic::catch_unwind(AssertUnwindSafe(move || {
+                    ref_slice.split_at(mid)
+                })).unwrap_err();
+            }
+            assert_eq!(data, initial_data);
+        }
     }
 }
