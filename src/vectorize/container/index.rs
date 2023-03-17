@@ -331,4 +331,68 @@ unsafe impl<V: VectorInfo, Data: VectorizedDataImpl<V>> VectorIndex<V, Data>
     }
 }
 
-// FIXME: Tests
+#[cfg(test)]
+mod tests {
+    use crate::vectorize::{
+        container::tests::make_vectorized,
+        data::tests::{read_tuple, tuple_init_input, with_data_index, SimdData},
+    };
+    use proptest::prelude::*;
+    use std::panic::AssertUnwindSafe;
+
+    // Variation of with_data_index that only produces _invalid_ data indices
+    ///
+    /// Used to check that safe indexing performs bound checking properly.
+    /// Should not be used with unsafe indexing.
+    fn with_invalid_data_index<Data: SimdData>(data: Data) -> impl Strategy<Value = (Data, usize)> {
+        let simd_len = data.simd_len();
+        (Just(data), simd_len..)
+    }
+
+    // TODO: slice index generators, think about half-invalid configs too when
+    //       two indices are involved. Flip a coin, if false then only right
+    //       side is wrong, if true then left side is wrong too (you cannot have
+    //       only the left side wrong since 0 is the minimal left index and it's
+    //       valid. Think about "weird zeros" as well where left >= right.
+
+    proptest! {
+        /// Read SIMD element at a given valid index
+        #[test]
+        fn get_valid_elem((mut data, idx) in tuple_init_input(false).prop_flat_map(with_data_index)) {
+            let initial_data = data.clone();
+            {
+                let expected = data.simd_element(idx);
+                let mut vectorized = make_vectorized(&mut data);
+                assert_eq!(vectorized.index(idx), expected);
+                assert_eq!(read_tuple(vectorized.index_ref(idx)), expected);
+                assert_eq!(vectorized.get(idx).unwrap(), expected);
+                assert_eq!(read_tuple(vectorized.get_ref(idx).unwrap()), expected);
+                assert_eq!(unsafe { vectorized.get_unchecked(idx) }, expected);
+                assert_eq!(read_tuple(unsafe { vectorized.get_unchecked_ref(idx) }), expected);
+            }
+            assert_eq!(data, initial_data);
+        }
+
+        /// Read SIMD element at a given invalid index
+        #[test]
+        fn get_invalid_elem((mut data, idx) in tuple_init_input(true).prop_flat_map(with_invalid_data_index)) {
+            let initial_data = data.clone();
+            {
+                let mut vectorized = make_vectorized(&mut data);
+                std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    vectorized.index(idx);
+                })).unwrap_err();
+                std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    vectorized.index_ref(idx);
+                })).unwrap_err();
+                assert!(vectorized.get(idx).is_none());
+                assert!(vectorized.get_ref(idx).is_none());
+                // No _unchecked operation at an invalid index!
+            }
+            assert_eq!(data, initial_data);
+        }
+
+        // TODO: Write at valid index => Extract write validation function container::tests::set_first_last()::check_data_write()
+        // TODO: Do it again with other forms of slicing/indexing
+    }
+}

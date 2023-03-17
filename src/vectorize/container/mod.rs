@@ -500,7 +500,7 @@ pub type VectorizedUnaligned<V, Data> = Vectorized<V, <Data as VectorizedDataImp
 pub type VectorizedPadded<V, Data> = Vectorized<V, Data>;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::vectorize::{
         data::tests::{
@@ -512,9 +512,17 @@ mod tests {
     use proptest::prelude::*;
     use std::panic::AssertUnwindSafe;
 
+    // TODO: Leave testing of indexing, iterators and chunks to the dedicated modules
+    //       Remember to test setting data, not just getting it.
+
+    // === COMMON TEST HARNESS ===
+
     /// Variant of with_split_index from the data module, which generates
     /// indices that are _not_ valid for slipping a certain dataset.
-    fn with_invalid_split_index<Data: SimdData>(
+    ///
+    /// Used to check that safe split_at performs bound checking properly.
+    /// Should not be used with unsafe split_at_unchecked.
+    pub(crate) fn with_invalid_split_index<Data: SimdData>(
         data: Data,
     ) -> impl Strategy<Value = (Data, usize)> {
         let simd_len = data.simd_len();
@@ -522,16 +530,13 @@ mod tests {
     }
 
     /// Build a Vectorized view for a TupleData dataset
-    fn make_vectorized(data: &mut TupleInitInput) -> Vectorized<V, TupleData> {
+    pub(crate) fn make_vectorized(data: &mut TupleInitInput) -> Vectorized<V, TupleData> {
         let len = data.simd_len();
         let data = data.as_tuple_data();
         unsafe { Vectorized::from_raw_parts(data, len) }
     }
 
-    // TODO: Leave testing of indexing, iterators and chunks to the dedicated modules
-    //       Remember to test setting data, not just getting it.
-    // TODO: with_invalid_data_index generators => index module
-    // TODO: slice index generators => index module
+    // === TESTS FOR THIS MODULE ===
 
     proptest! {
         /// Test properties of a freshly created Vectorized container
